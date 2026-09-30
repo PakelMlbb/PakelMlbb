@@ -1,7 +1,6 @@
 # =====================================================================================
 #  PAKEL MLBBSTORE — MAIN RUNNER
 #  Jalanin Bot Telegram + API Flask sekaligus dalam 1 service
-#  TANPA mengubah script pakeltest.py atau apk_api.py
 # =====================================================================================
 
 import os
@@ -9,25 +8,21 @@ import threading
 import time
 
 # =====================================================================================
-#  IMPORT FLASK APP (dari apk_api.py) — AMAN, GAK ADA POLLING
+#  IMPORT FLASK APP (dari apk_api.py)
 # =====================================================================================
 from apk_api import app
 
 # =====================================================================================
 #  RUN BOT TELEGRAM DI BACKGROUND THREAD
-#  Import pakeltest DI DALAM fungsi → polling jalan di thread ini
 # =====================================================================================
 def run_bot():
     print("[MAIN] 🤖 Import pakeltest & starting Telegram bot...")
     try:
-        # Import di dalam fungsi — biar polling-nya jalan di thread ini,
-        # BUKAN di main thread yang bikin Flask ke-blok
         import pakeltest
         print("[MAIN] ✅ pakeltest imported. Bot polling aktif di background.")
-        # Thread ini bakal ke-blok di pakeltest (infinity_polling)
-        # Selama bot hidup, thread ini hidup.
-        while True:
-            time.sleep(3600)
+        # JALANKAN POLLING DI SINI
+        # (karena di pakeltest.py ada if __name__ == '__main__' yang GAK JALAN saat di-import)
+        pakeltest.bot.infinity_polling(timeout=60, long_polling_timeout=30)
     except Exception as e:
         print(f"[MAIN] ❌ Bot error: {e}")
 
@@ -52,6 +47,6 @@ if __name__ == '__main__':
         host='0.0.0.0',
         port=port,
         debug=False,
-        use_reloader=False,   # WAJIB False biar bot gak jalan 2x
+        use_reloader=False,
         threaded=True
     )
