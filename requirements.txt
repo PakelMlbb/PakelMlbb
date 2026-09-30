@@ -1,0 +1,5 @@
+pyTelegramBotAPI
+groq
+matplotlib
+flask
+flask-cors
