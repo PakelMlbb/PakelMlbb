@@ -44,7 +44,7 @@ time.sleep(3)
 #  RUN FLASK DI MAIN THREAD (Railway butuh buka port)
 # =====================================================================================
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 8080))
     print(f"[MAIN] 🌐 Starting API on port {port}")
     print(f"[MAIN] ✅ Bot + API running!")
     
