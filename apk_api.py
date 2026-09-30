@@ -1,6 +1,5 @@
 # =====================================================================================
-#  PAKEL MLBBSTORE — APK API SERVER (v4 — FULL FITUR + SINKRON BOT) 
-# FORCE REBUILD v4 - 221001
+#  PAKEL MLBBSTORE — APK API SERVER (v5 — FULL FITUR + CANCEL ORDER)
 # =====================================================================================
 
 from flask import Flask, request, jsonify
@@ -490,7 +489,7 @@ def home():
     return jsonify({
         "status": "OK",
         "message": "Pakel MlbbStore APK API",
-        "version": "4.0",
+        "version": "5.0",
         "time": datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S WIB')
     })
 
@@ -535,6 +534,19 @@ def create_order():
 
         if paket_kode not in MASTER_PAKET:
             return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 400
+
+        # Cek apakah user masih ada order PENDING — anti dobel order
+        try:
+            with open(F_ORDERS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) >= 8 and parts[0] == chat_id and parts[7].strip() == "PENDING":
+                        return jsonify({
+                            "status": "ERROR",
+                            "message": f"Kamu masih punya pesanan PENDING (Resi: {parts[6]}). Selesaikan atau batalkan dulu!"
+                        }), 400
+        except FileNotFoundError:
+            pass
 
         nama, harga, harga_str, poin, _ = MASTER_PAKET[paket_kode]
         stok = get_stok(paket_kode)
@@ -649,6 +661,62 @@ def cek_resi():
     if order:
         return jsonify({"status": "OK", "order": order})
     return jsonify({"status": "ERROR", "message": "Resi tidak ditemukan"}), 404
+
+@app.route('/api/cek-pending', methods=['GET'])
+def cek_pending():
+    """Cek apakah user masih ada order PENDING."""
+    chat_id = request.args.get('chat_id', '').strip()
+    if not chat_id:
+        return jsonify({"status": "ERROR", "message": "Chat ID wajib diisi"}), 400
+    pending = []
+    try:
+        with open(F_ORDERS, "r") as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) >= 8 and parts[0] == str(chat_id) and parts[7].strip() == "PENDING":
+                    pending.append({
+                        'resi': parts[6],
+                        'paket': parts[4],
+                        'harga': parts[5],
+                        'tanggal': parts[1],
+                        'jam': parts[3]
+                    })
+    except FileNotFoundError:
+        pass
+    return jsonify({"status": "OK", "pending": pending, "count": len(pending)})
+
+@app.route('/api/cancel-order', methods=['POST'])
+def cancel_order():
+    """Batalkan order PENDING milik user."""
+    try:
+        data = request.json
+        chat_id = str(data.get('chat_id', '')).strip()
+        resi = str(data.get('resi', '')).strip().upper()
+        if not chat_id or not resi:
+            return jsonify({"status": "ERROR", "message": "Chat ID & Resi wajib diisi"}), 400
+        order = get_order_by_resi(resi)
+        if not order:
+            return jsonify({"status": "ERROR", "message": "Resi tidak ditemukan"}), 404
+        if order['chat_id'] != chat_id:
+            return jsonify({"status": "ERROR", "message": "Resi bukan milik Anda"}), 403
+        if order['status'] != 'PENDING':
+            return jsonify({"status": "ERROR", "message": f"Order sudah diproses ({order['status']})"}), 400
+        rows = []
+        updated = False
+        with open(F_ORDERS, "r") as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) >= 8 and parts[6].strip().upper() == resi:
+                    parts[7] = "CANCELLED"
+                    updated = True
+                rows.append('|'.join(parts) + "\n")
+        if updated:
+            with open(F_ORDERS, "w") as f:
+                f.writelines(rows)
+            return jsonify({"status": "OK", "message": "Pesanan berhasil dibatalkan"})
+        return jsonify({"status": "ERROR", "message": "Gagal update status"}), 500
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 @app.route('/api/cek-poin', methods=['GET'])
 def cek_poin():
@@ -831,7 +899,7 @@ def get_vouchers():
 # =====================================================================================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    print(f"[INFO] Pakel MlbbStore APK API v4 running on port {port}")
+    print(f"[INFO] Pakel MlbbStore APK API v5 running on port {port}")
     ensure_stocks_file()
     ensure_proofs_folder()
     app.run(host='0.0.0.0', port=port, debug=False)
