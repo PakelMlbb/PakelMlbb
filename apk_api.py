@@ -1,5 +1,5 @@
 # =====================================================================================
-#  PAKEL MLBBSTORE — APK API SERVER
+#  PAKEL MLBBSTORE — APK API SERVER (FIX v2 — STOK AUTO-REPAIR)
 #  Jembatan antara APK & Bot Telegram
 #  Deploy bareng bot Telegram di Railway
 # =====================================================================================
@@ -44,6 +44,18 @@ MASTER_PAKET = {
     'buy_permanent': ("Permanent Legend (Lifetime)", 250000, "Rp 250.000", 90, "🎯 Sekali bayar, update seumur hidup."),
 }
 
+# Default stok fallback (dipakai kalau file stocks.txt kosong / paket missing)
+DEFAULT_STOK = {
+    'buy_sultan': 8,
+    'buy_pro': 45,
+    'buy_permanent': 12,
+    'buy_natural': 35,
+    'buy_lifetimesafe': 20,
+    'buy_light': 60,
+    'buy_semisafe': 75,
+    'buy_semiprivate': 70,
+}
+
 # =====================================================================================
 #  FLASK APP
 # =====================================================================================
@@ -77,7 +89,17 @@ def read_stocks():
                         pass
     except FileNotFoundError:
         pass
+    except Exception as e:
+        print(f"[API] read_stocks error: {e}")
     return stocks
+
+def get_stok(paket_kode):
+    """Ambil stok dengan fallback ke DEFAULT_STOK kalau kosong / 0."""
+    stocks = read_stocks()
+    stok = stocks.get(paket_kode)
+    if stok is None or stok <= 0:
+        return DEFAULT_STOK.get(paket_kode, 10)
+    return stok
 
 def read_flashsale():
     try:
@@ -190,48 +212,64 @@ def save_user_voucher(chat_id, kode, diskon):
 
 
 # =====================================================================================
-#  AUTO-CREATE STOCKS.TXT KALAU BELUM ADA
-#  (Biar stok muncul di APK walau bot belum pernah nulis)
+#  AUTO-CREATE STOCKS.TXT KALAU BELUM ADA / KOSONG / PAKET MISSING
 # =====================================================================================
 def ensure_stocks_file():
-    """Bikin folder /data + file stocks.txt kalau belum ada / kosong."""
+    """Bikin folder /data + file stocks.txt kalau belum ada / kosong / kurang."""
     try:
+        # DEBUG: Print info DATA_DIR
+        print(f"[API] DATA_DIR = {DATA_DIR}")
+        print(f"[API] F_STOCKS = {F_STOCKS}")
+        print(f"[API] Folder exists? {os.path.exists(DATA_DIR)}")
+        print(f"[API] File exists? {os.path.exists(F_STOCKS)}")
+
         # Pastiin folder DATA_DIR ada
         if DATA_DIR and DATA_DIR != '.':
             try:
                 os.makedirs(DATA_DIR, exist_ok=True)
+                print(f"[API] ✅ Folder {DATA_DIR} ready")
             except Exception as e:
                 print(f"[API] ⚠️ Cannot create {DATA_DIR}: {e}")
 
-        # Cek apakah file udah ada & ada isinya
+        # Baca stok yang ada (kalau file ada)
+        existing = {}
         if os.path.exists(F_STOCKS):
             try:
                 with open(F_STOCKS, "r") as f:
-                    content = f.read().strip()
-                if content:
-                    return  # udah ada isinya, skip
-            except Exception:
-                pass
+                    for line in f:
+                        parts = line.strip().split('|')
+                        if len(parts) >= 2:
+                            try:
+                                existing[parts[0]] = int(parts[1])
+                            except ValueError:
+                                pass
+                print(f"[API] 📖 Existing stocks: {existing}")
+            except Exception as e:
+                print(f"[API] ⚠️ Read error: {e}")
 
-        # Bikin file baru dengan stok default
-        default_stocks = {
-            'buy_sultan': 8,
-            'buy_pro': 45,
-            'buy_permanent': 12,
-            'buy_natural': 35,
-            'buy_lifetimesafe': 20,
-            'buy_light': 60,
-            'buy_semisafe': 75,
-            'buy_semiprivate': 70,
-        }
-        with open(F_STOCKS, "w") as f:
-            now_ts = int(time.time())
-            for code, stok in default_stocks.items():
-                f.write(f"{code}|{stok}|{now_ts}\n")
-        print(f"[API] ✅ Auto-created stocks.txt at {F_STOCKS}")
+        # Cek paket yang missing / stok 0 → isi default
+        changed = False
+        for code, default_val in DEFAULT_STOK.items():
+            if code not in existing or existing[code] <= 0:
+                existing[code] = default_val
+                changed = True
+                print(f"[API] 🔧 Fill {code} = {default_val}")
+
+        # Kalau ada perubahan / file belum ada → tulis ulang
+        if changed or not os.path.exists(F_STOCKS):
+            with open(F_STOCKS, "w") as f:
+                now_ts = int(time.time())
+                for code in MASTER_PAKET.keys():
+                    stok = existing.get(code, DEFAULT_STOK.get(code, 50))
+                    f.write(f"{code}|{stok}|{now_ts}\n")
+            print(f"[API] ✅ WROTE stocks.txt at {F_STOCKS}")
+        else:
+            print(f"[API] ✅ stocks.txt sudah OK, no change")
 
     except Exception as e:
         print(f"[API] ❌ Failed ensure_stocks_file: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # =====================================================================================
@@ -259,7 +297,8 @@ def get_paket():
     paket_list = []
     for kode, data in MASTER_PAKET.items():
         nama, harga, harga_str, poin, deskripsi = data
-        stok = stocks.get(kode, 0)
+        # FIX: pake get_stok() biar ada fallback kalau kosong
+        stok = get_stok(kode)
 
         # Hitung harga flash sale
         harga_final = harga
@@ -307,9 +346,8 @@ def create_order():
 
         nama, harga, harga_str, poin, _ = MASTER_PAKET[paket_kode]
 
-        # Cek stok
-        stocks = read_stocks()
-        stok = stocks.get(paket_kode, 0)
+        # Cek stok (pake get_stok biar ada fallback)
+        stok = get_stok(paket_kode)
         if stok <= 0:
             return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
 
