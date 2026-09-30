@@ -34,14 +34,14 @@ ADMIN_TELEGRAM_ID = 8772023108
 #  DATA PAKET (HARUS SAMA DENGAN BOT TELEGRAM)
 # =====================================================================================
 MASTER_PAKET = {
-    'buy_natural': ("Natural Balance (30 Hari)", 120000, "Rp 120.000", 45, "..."),
-    'buy_light': ("Light VIP + Drone (30 Hari)", 95000, "Rp 95.000", 35, "..."),
-    'buy_semisafe': ("Semi-Safe 14 Hari", 75000, "Rp 75.000", 25, "..."),
-    'buy_lifetimesafe': ("Lifetime Safe Permanent", 200000, "Rp 200.000", 75, "..."),
-    'buy_sultan': ("Sultan One Hit 100% (30 Hari)", 150000, "Rp 150.000", 55, "..."),
-    'buy_pro': ("VIP Pro One Hit 80% (30 Hari)", 100000, "Rp 100.000", 40, "..."),
-    'buy_semiprivate': ("Semi-Private 14 Hari", 75000, "Rp 75.000", 25, "..."),
-    'buy_permanent': ("Permanent Legend (Lifetime)", 250000, "Rp 250.000", 90, "..."),
+    'buy_natural': ("Natural Balance (30 Hari)", 120000, "Rp 120.000", 45, "🎯 Damage disesuaikan, aman & senyap."),
+    'buy_light': ("Light VIP + Drone (30 Hari)", 95000, "Rp 95.000", 35, "🎯 Damage wajar + pandangan luas."),
+    'buy_semisafe': ("Semi-Safe 14 Hari", 75000, "Rp 75.000", 25, "🎯 Paket harian terjangkau."),
+    'buy_lifetimesafe': ("Lifetime Safe Permanent", 200000, "Rp 200.000", 75, "🎯 Solusi hemat jangka panjang."),
+    'buy_sultan': ("Sultan One Hit 100% (30 Hari)", 150000, "Rp 150.000", 55, "🎯 Damage tembus batas, instant kill."),
+    'buy_pro': ("VIP Pro One Hit 80% (30 Hari)", 100000, "Rp 100.000", 40, "🎯 Damage sakit, skin kebuka."),
+    'buy_semiprivate': ("Semi-Private 14 Hari", 75000, "Rp 75.000", 25, "🎯 Performa stabil, anti patah-patah."),
+    'buy_permanent': ("Permanent Legend (Lifetime)", 250000, "Rp 250.000", 90, "🎯 Sekali bayar, update seumur hidup."),
 }
 
 # =====================================================================================
@@ -188,6 +188,52 @@ def save_user_voucher(chat_id, kode, diskon):
     except Exception:
         pass
 
+
+# =====================================================================================
+#  AUTO-CREATE STOCKS.TXT KALAU BELUM ADA
+#  (Biar stok muncul di APK walau bot belum pernah nulis)
+# =====================================================================================
+def ensure_stocks_file():
+    """Bikin folder /data + file stocks.txt kalau belum ada / kosong."""
+    try:
+        # Pastiin folder DATA_DIR ada
+        if DATA_DIR and DATA_DIR != '.':
+            try:
+                os.makedirs(DATA_DIR, exist_ok=True)
+            except Exception as e:
+                print(f"[API] ⚠️ Cannot create {DATA_DIR}: {e}")
+
+        # Cek apakah file udah ada & ada isinya
+        if os.path.exists(F_STOCKS):
+            try:
+                with open(F_STOCKS, "r") as f:
+                    content = f.read().strip()
+                if content:
+                    return  # udah ada isinya, skip
+            except Exception:
+                pass
+
+        # Bikin file baru dengan stok default
+        default_stocks = {
+            'buy_sultan': 8,
+            'buy_pro': 45,
+            'buy_permanent': 12,
+            'buy_natural': 35,
+            'buy_lifetimesafe': 20,
+            'buy_light': 60,
+            'buy_semisafe': 75,
+            'buy_semiprivate': 70,
+        }
+        with open(F_STOCKS, "w") as f:
+            now_ts = int(time.time())
+            for code, stok in default_stocks.items():
+                f.write(f"{code}|{stok}|{now_ts}\n")
+        print(f"[API] ✅ Auto-created stocks.txt at {F_STOCKS}")
+
+    except Exception as e:
+        print(f"[API] ❌ Failed ensure_stocks_file: {e}")
+
+
 # =====================================================================================
 #  API ENDPOINTS
 # =====================================================================================
@@ -195,6 +241,7 @@ def save_user_voucher(chat_id, kode, diskon):
 @app.route('/', methods=['GET'])
 def home():
     """Test API jalan."""
+    ensure_stocks_file()  # Auto-bikin stok pas API diakses
     return jsonify({
         "status": "OK",
         "message": "Pakel MlbbStore APK API",
@@ -205,19 +252,20 @@ def home():
 @app.route('/api/paket', methods=['GET'])
 def get_paket():
     """Ambil semua paket."""
+    ensure_stocks_file()  # ← AUTO-BIKIN STOK KALAU BELUM ADA
     stocks = read_stocks()
     flashsale_diskon, flashsale_sisa = read_flashsale()
-    
+
     paket_list = []
     for kode, data in MASTER_PAKET.items():
         nama, harga, harga_str, poin, deskripsi = data
         stok = stocks.get(kode, 0)
-        
+
         # Hitung harga flash sale
         harga_final = harga
         if flashsale_diskon > 0:
             harga_final = int(harga * (100 - flashsale_diskon) / 100)
-        
+
         paket_list.append({
             "kode": kode,
             "nama": nama,
@@ -231,7 +279,7 @@ def get_paket():
             "flashsale": flashsale_diskon > 0,
             "flashsale_diskon": flashsale_diskon
         })
-    
+
     return jsonify({
         "status": "OK",
         "paket": paket_list,
@@ -250,24 +298,24 @@ def create_order():
         voucher_kode = data.get('voucher_kode', '')
         username = data.get('username', '')
         nama_user = data.get('nama_user', '')
-        
+
         if not chat_id or not paket_kode:
             return jsonify({"status": "ERROR", "message": "Data tidak lengkap"}), 400
-        
+
         if paket_kode not in MASTER_PAKET:
             return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 400
-        
+
         nama, harga, harga_str, poin, _ = MASTER_PAKET[paket_kode]
-        
+
         # Cek stok
         stocks = read_stocks()
         stok = stocks.get(paket_kode, 0)
         if stok <= 0:
             return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
-        
+
         # Hitung harga final
         harga_final = harga
-        
+
         # Flash sale
         flashsale_diskon, _ = read_flashsale()
         if flashsale_diskon > 0:
@@ -277,11 +325,11 @@ def create_order():
             tier_label, multiplier, diskon_tier = get_user_tier(chat_id)
             if diskon_tier > 0:
                 harga_final = int(harga * (100 - diskon_tier) / 100)
-            
+
             # Promo member baru
             if get_coupon_status(chat_id) == "AVAILABLE":
                 harga_final -= 10000
-        
+
         # Voucher
         if voucher_kode:
             vouchers = read_vouchers()
@@ -290,12 +338,12 @@ def create_order():
                 v = vouchers[kode_up]
                 if v['terpakai'] < v['max'] and (v['expired'] == 0 or time.time() < v['expired']):
                     harga_final -= v['diskon']
-        
+
         harga_final = max(0, harga_final)
-        
+
         # Generate resi
         resi = f"PKL-MLBB-{random.randint(10000, 99999)}"
-        
+
         # Simpan order
         now = datetime.now(WIB)
         tanggal = now.strftime('%d-%m-%Y')
@@ -303,11 +351,11 @@ def create_order():
         hari = hari_map.get(now.strftime('%a'), now.strftime('%a'))
         jam = now.strftime('%H:%M:%S WIB')
         ts = int(now.timestamp())
-        
+
         order_line = f"{chat_id}|{tanggal}|{hari}|{jam}|{nama}|Rp {harga_final:,}|{resi}|PENDING|{ts}|{payment_method}|0|0\n"
         with open(F_ORDERS, "a") as f:
             f.write(order_line)
-        
+
         return jsonify({
             "status": "OK",
             "message": "Order berhasil dibuat",
@@ -316,7 +364,7 @@ def create_order():
             "harga_final_str": f"Rp {harga_final:,}",
             "paket": nama
         })
-    
+
     except Exception as e:
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
@@ -326,7 +374,7 @@ def cek_resi():
     resi = request.args.get('resi', '').strip().upper()
     if not resi:
         return jsonify({"status": "ERROR", "message": "Resi tidak boleh kosong"}), 400
-    
+
     try:
         with open(F_ORDERS, "r") as f:
             for line in f:
@@ -348,7 +396,7 @@ def cek_resi():
                     })
     except FileNotFoundError:
         pass
-    
+
     return jsonify({"status": "ERROR", "message": "Resi tidak ditemukan"}), 404
 
 @app.route('/api/cek-poin', methods=['GET'])
@@ -357,11 +405,11 @@ def cek_poin():
     chat_id = request.args.get('chat_id', '').strip()
     if not chat_id:
         return jsonify({"status": "ERROR", "message": "Chat ID tidak boleh kosong"}), 400
-    
+
     points = read_points(chat_id)
     tier_label, multiplier, diskon = get_user_tier(chat_id)
     total_order = count_user_success_orders(chat_id)
-    
+
     return jsonify({
         "status": "OK",
         "data": {
@@ -381,28 +429,28 @@ def redeem_voucher():
         data = request.json
         chat_id = data.get('chat_id')
         kode = data.get('kode', '').strip().upper()
-        
+
         if not chat_id or not kode:
             return jsonify({"status": "ERROR", "message": "Data tidak lengkap"}), 400
-        
+
         # Cek duplikat
         if user_has_voucher(chat_id, kode):
             return jsonify({"status": "ERROR", "message": "Kamu sudah redeem voucher ini"}), 400
-        
+
         vouchers = read_vouchers()
         if kode not in vouchers:
             return jsonify({"status": "ERROR", "message": "Kode voucher tidak ditemukan"}), 404
-        
+
         v = vouchers[kode]
         if v['terpakai'] >= v['max']:
             return jsonify({"status": "ERROR", "message": "Kuota voucher habis"}), 400
-        
+
         if v['expired'] > 0 and time.time() > v['expired']:
             return jsonify({"status": "ERROR", "message": "Voucher sudah expired"}), 400
-        
+
         # Simpan ke user
         save_user_voucher(chat_id, kode, v['diskon'])
-        
+
         # Increment terpakai
         v['terpakai'] += 1
         rows = []
@@ -410,9 +458,9 @@ def redeem_voucher():
             rows.append(f"{k}|{vv['diskon']}|{vv['max']}|{vv['terpakai']}|{vv['expired']}")
         with open(F_VOUCHERS, "w") as f:
             f.write("\n".join(rows) + "\n")
-        
+
         sisa = v['max'] - v['terpakai']
-        
+
         return jsonify({
             "status": "OK",
             "message": "Voucher berhasil di-redeem",
@@ -420,7 +468,7 @@ def redeem_voucher():
             "diskon": v['diskon'],
             "sisa_kuota": sisa
         })
-    
+
     except Exception as e:
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
@@ -438,13 +486,15 @@ def get_vouchers():
                 "sisa": v['max'] - v['terpakai'],
                 "expired": v['expired']
             })
-    
+
     return jsonify({"status": "OK", "vouchers": aktif})
 
 # =====================================================================================
 #  RUN — STANDALONE MODE
 # =====================================================================================
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 8080))
     print(f"[INFO] Pakel MlbbStore APK API running on port {port}")
+    # Auto-bikin stok.txt pas startup
+    ensure_stocks_file()
     app.run(host='0.0.0.0', port=port, debug=False)
