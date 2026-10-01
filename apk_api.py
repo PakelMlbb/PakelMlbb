@@ -1,5 +1,5 @@
 # =====================================================================================
-#  PAKEL MLBBSTORE — APK API SERVER (v5 — FULL FITUR + CANCEL ORDER + CEK USER)
+#  PAKEL MLBBSTORE — APK API SERVER (v6 — FULL FITUR + CANCEL ORDER + CEK USER + VOUCHER)
 # =====================================================================================
 
 from flask import Flask, request, jsonify
@@ -187,6 +187,70 @@ def get_coupon_status(chat_id):
     except FileNotFoundError:
         pass
     return "AVAILABLE"
+
+# =====================================================================================
+#  FUNGSI BARU — VOUCHER USER (FIX BUG VOUCHER GAK KEPOTONG)
+# =====================================================================================
+def get_user_voucher_total_diskon(chat_id):
+    """Baca semua voucher aktif user dari user_voucher.txt, return total diskon."""
+    total = 0
+    try:
+        if not os.path.exists(F_USER_VOUCHER):
+            return 0
+        with open(F_USER_VOUCHER, "r") as f:
+            for ln in f:
+                parts = ln.strip().split('|')
+                if len(parts) >= 3 and parts[0] == str(chat_id):
+                    if parts[1].startswith("VOUCHER_"):
+                        try:
+                            total += int(parts[2])
+                        except ValueError:
+                            pass
+    except Exception as e:
+        print(f"[API] get_user_voucher_total_diskon error: {e}")
+    return total
+
+def get_user_voucher_list(chat_id):
+    """Baca semua voucher aktif user, return list of dict."""
+    vouchers = []
+    try:
+        if not os.path.exists(F_USER_VOUCHER):
+            return vouchers
+        with open(F_USER_VOUCHER, "r") as f:
+            for ln in f:
+                parts = ln.strip().split('|')
+                if len(parts) >= 3 and parts[0] == str(chat_id):
+                    if parts[1].startswith("VOUCHER_"):
+                        kode = parts[1].replace("VOUCHER_", "")
+                        try:
+                            diskon = int(parts[2])
+                        except ValueError:
+                            diskon = 0
+                        vouchers.append({"kode": kode, "diskon": diskon})
+    except Exception as e:
+        print(f"[API] get_user_voucher_list error: {e}")
+    return vouchers
+
+def consume_user_voucher_api(chat_id):
+    """Hapus 1 voucher user (yang pertama ditemukan) setelah dipakai order."""
+    try:
+        if not os.path.exists(F_USER_VOUCHER):
+            return
+        with open(F_USER_VOUCHER, "r") as f:
+            rows = [ln.strip() for ln in f if ln.strip()]
+        new_rows = []
+        consumed = False
+        for ln in rows:
+            parts = ln.split('|')
+            if not consumed and len(parts) >= 2 and parts[0] == str(chat_id) and parts[1].startswith("VOUCHER_"):
+                consumed = True
+                continue
+            new_rows.append(ln)
+        with open(F_USER_VOUCHER, "w") as f:
+            f.write("\n".join(new_rows) + ("\n" if new_rows else ""))
+        print(f"[API] ✅ Voucher user {chat_id} consumed")
+    except Exception as e:
+        print(f"[API] consume_user_voucher_api error: {e}")
 
 def user_has_voucher(chat_id, kode):
     kode_up = kode.upper().strip()
@@ -489,7 +553,7 @@ def home():
     return jsonify({
         "status": "OK",
         "message": "Pakel MlbbStore APK API",
-        "version": "5.0",
+        "version": "6.0",
         "time": datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S WIB')
     })
 
@@ -553,6 +617,7 @@ def create_order():
         if stok <= 0:
             return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
 
+        # ========== HITUNG HARGA FINAL ==========
         harga_final = harga
         flashsale_diskon, _ = read_flashsale()
         if flashsale_diskon > 0:
@@ -563,6 +628,12 @@ def create_order():
                 harga_final = int(harga * (100 - diskon_tier) / 100)
             if get_coupon_status(chat_id) == "AVAILABLE":
                 harga_final -= 10000
+
+        # ✅ FIX BUG: Cek voucher user dari user_voucher.txt
+        voucher_diskon = get_user_voucher_total_diskon(chat_id)
+        if voucher_diskon > 0:
+            harga_final -= voucher_diskon
+            print(f"[API] 🎫 Voucher diskon applied: -Rp {voucher_diskon:,}")
 
         harga_final = max(0, harga_final)
         resi = f"PKL-MLBB-{random.randint(10000, 99999)}"
@@ -578,10 +649,16 @@ def create_order():
         with open(F_ORDERS, "a") as f:
             f.write(order_line)
 
+        # ✅ FIX BUG: Consume voucher setelah order berhasil dibuat
+        if voucher_diskon > 0:
+            consume_user_voucher_api(chat_id)
+            print(f"[API] ✅ Voucher user {chat_id} consumed setelah order {resi}")
+
         return jsonify({
             "status": "OK", "message": "Order berhasil dibuat",
             "resi": resi, "harga_final": harga_final,
             "harga_final_str": f"Rp {harga_final:,}", "paket": nama,
+            "voucher_diskon": voucher_diskon,
             "waktu": f"{hari}, {tanggal} {jam}"
         })
     except Exception as e:
@@ -896,8 +973,6 @@ def get_vouchers():
 
 # =====================================================================================
 #  ENDPOINT BARU — CEK USER TELEGRAM (VALIDASI CHAT ID + AUTO-CARI NAMA)
-#  Fungsi: validasi Chat ID asli via Telegram getChat API
-#  Dipakai oleh index.html untuk auto-verify & tampilkan nama user
 # =====================================================================================
 @app.route('/api/cek-user', methods=['GET'])
 def cek_user():
@@ -929,11 +1004,31 @@ def cek_user():
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 # =====================================================================================
+#  ENDPOINT BARU — LIST VOUCHER USER (UNTUK APK)
+# =====================================================================================
+@app.route('/api/user-vouchers', methods=['GET'])
+def api_user_vouchers():
+    """Baca voucher aktif user dari user_voucher.txt + total diskon."""
+    chat_id = request.args.get('chat_id', '').strip()
+    if not chat_id:
+        return jsonify({"status": "ERROR", "message": "Chat ID wajib diisi"}), 400
+
+    vouchers = get_user_voucher_list(chat_id)
+    total_diskon = sum(v['diskon'] for v in vouchers)
+
+    return jsonify({
+        "status": "OK",
+        "vouchers": vouchers,
+        "total_diskon": total_diskon,
+        "count": len(vouchers)
+    })
+
+# =====================================================================================
 #  RUN — STANDALONE MODE
 # =====================================================================================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    print(f"[INFO] Pakel MlbbStore APK API v5 running on port {port}")
+    print(f"[INFO] Pakel MlbbStore APK API v6 running on port {port}")
     ensure_stocks_file()
     ensure_proofs_folder()
     app.run(host='0.0.0.0', port=port, debug=False)
