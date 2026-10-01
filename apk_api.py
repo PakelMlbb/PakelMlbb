@@ -174,7 +174,55 @@ def count_user_success_orders(chat_id):
     except FileNotFoundError:
         pass
     return total
+def set_coupon_status_api(chat_id, status_baru):
+    """Update status kupon user di coupons.txt."""
+    try:
+        chat_id_str = str(chat_id)
+        rows = []
+        updated = False
+        if os.path.exists(F_COUPONS):
+            with open(F_COUPONS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) == 2:
+                        c_id, status = parts
+                        if c_id == chat_id_str:
+                            status = status_baru
+                            updated = True
+                        rows.append(f"{c_id}|{status}\n")
+        if not updated:
+            rows.append(f"{chat_id_str}|{status_baru}\n")
+        tmp = F_COUPONS + ".tmp"
+        with open(tmp, "w") as f:
+            f.writelines(rows)
+        if os.path.exists(F_COUPONS):
+            os.remove(F_COUPONS)
+        os.rename(tmp, F_COUPONS)
+        print(f"[API] ✅ Coupon status {chat_id} → {status_baru}")
+    except Exception as e:
+        print(f"[API] set_coupon_status_api error: {e}")
 
+
+def consume_user_lucky_diskon_api(chat_id):
+    """Hapus 1 lucky draw diskon user (DISKON prefix) setelah dipakai."""
+    try:
+        if not os.path.exists(F_USER_VOUCHER):
+            return
+        with open(F_USER_VOUCHER, "r") as f:
+            rows = [ln.strip() for ln in f if ln.strip()]
+        new_rows = []
+        consumed = False
+        for ln in rows:
+            parts = ln.split('|')
+            if not consumed and len(parts) >= 2 and parts[0] == str(chat_id) and parts[1].startswith("DISKON"):
+                consumed = True
+                continue
+            new_rows.append(ln)
+        with open(F_USER_VOUCHER, "w") as f:
+            f.write("\n".join(new_rows) + ("\n" if new_rows else ""))
+        print(f"[API] ✅ Lucky draw diskon {chat_id} consumed")
+    except Exception as e:
+        print(f"[API] consume_user_lucky_diskon_api error: {e}")
 def get_coupon_status(chat_id):
     try:
         if not os.path.exists(F_COUPONS):
@@ -191,8 +239,8 @@ def get_coupon_status(chat_id):
 # =====================================================================================
 #  FUNGSI BARU — VOUCHER USER (FIX BUG VOUCHER GAK KEPOTONG)
 # =====================================================================================
-def get_user_voucher_total_diskon(chat_id):
-    """Baca semua voucher aktif user dari user_voucher.txt, return total diskon."""
+def get_user_voucher_rupiah(chat_id):
+    """Baca voucher RUPIAH user (VOUCHER_ prefix)."""
     total = 0
     try:
         if not os.path.exists(F_USER_VOUCHER):
@@ -207,8 +255,28 @@ def get_user_voucher_total_diskon(chat_id):
                         except ValueError:
                             pass
     except Exception as e:
-        print(f"[API] get_user_voucher_total_diskon error: {e}")
+        print(f"[API] get_user_voucher_rupiah error: {e}")
     return total
+
+def get_user_lucky_diskon_persen(chat_id):
+    """Baca diskon PERSEN dari lucky draw (DISKON prefix)."""
+    total_persen = 0
+    try:
+        if not os.path.exists(F_USER_VOUCHER):
+            return 0
+        with open(F_USER_VOUCHER, "r") as f:
+            for ln in f:
+                parts = ln.strip().split('|')
+                if len(parts) >= 2 and parts[0] == str(chat_id):
+                    if parts[1].startswith("DISKON"):
+                        try:
+                            persen = int(parts[1].replace("DISKON", ""))
+                            total_persen += persen
+                        except ValueError:
+                            pass
+    except Exception as e:
+        print(f"[API] get_user_lucky_diskon_persen error: {e}")
+    return total_persen
 
 def get_user_voucher_list(chat_id):
     """Baca semua voucher aktif user, return list of dict."""
@@ -619,23 +687,39 @@ def create_order():
 
         # ========== HITUNG HARGA FINAL ==========
         harga_final = harga
-        flashsale_diskon, _ = read_flashsale()
-        if flashsale_diskon > 0:
-            harga_final = int(harga * (100 - flashsale_diskon) / 100)
-        else:
-            tier_label, multiplier, diskon_tier = get_user_tier(chat_id)
-            if diskon_tier > 0:
-                harga_final = int(harga * (100 - diskon_tier) / 100)
-            if get_coupon_status(chat_id) == "AVAILABLE":
-                harga_final -= 10000
+diskon_detail = []
 
-        # ✅ FIX BUG: Cek voucher user dari user_voucher.txt
-        voucher_diskon = get_user_voucher_total_diskon(chat_id)
-        if voucher_diskon > 0:
-            harga_final -= voucher_diskon
-            print(f"[API] 🎫 Voucher diskon applied: -Rp {voucher_diskon:,}")
+# 1. Flash Sale (prioritas, tapi GAK skip diskon lain)
+flashsale_diskon, _ = read_flashsale()
+if flashsale_diskon > 0:
+    harga_final = int(harga_final * (100 - flashsale_diskon) / 100)
+    diskon_detail.append(f"FlashSale -{flashsale_diskon}%")
 
-        harga_final = max(0, harga_final)
+# 2. Tier diskon
+tier_label, multiplier, diskon_tier = get_user_tier(chat_id)
+if diskon_tier > 0:
+    harga_final = int(harga_final * (100 - diskon_tier) / 100)
+    diskon_detail.append(f"Tier -{diskon_tier}%")
+
+# 3. Kupon new user (Rp 10.000)
+if get_coupon_status(chat_id) == "AVAILABLE":
+    harga_final -= 10000
+    diskon_detail.append("KuponNewUser -Rp10.000")
+
+# 4. Lucky Draw Diskon (persen)
+lucky_persen = get_user_lucky_diskon_persen(chat_id)
+if lucky_persen > 0:
+    harga_final = int(harga_final * (100 - lucky_persen) / 100)
+    diskon_detail.append(f"LuckyDraw -{lucky_persen}%")
+
+# 5. Voucher user (rupiah)
+voucher_rupiah = get_user_voucher_rupiah(chat_id)
+if voucher_rupiah > 0:
+    harga_final -= voucher_rupiah
+    diskon_detail.append(f"Voucher -Rp{voucher_rupiah:,}")
+
+harga_final = max(0, harga_final)
+print(f"[API] 💰 Order {chat_id} - diskon: {', '.join(diskon_detail) if diskon_detail else 'NONE'}")
         resi = f"PKL-MLBB-{random.randint(10000, 99999)}"
 
         now = datetime.now(WIB)
@@ -646,19 +730,30 @@ def create_order():
         ts = int(now.timestamp())
 
         order_line = f"{chat_id}|{tanggal}|{hari}|{jam}|{nama}|Rp {harga_final:,}|{resi}|PENDING|{ts}|{payment_method}|0|0\n"
-        with open(F_ORDERS, "a") as f:
-            f.write(order_line)
+with open(F_ORDERS, "a") as f:
+    f.write(order_line)
 
-        # ✅ FIX BUG: Consume voucher setelah order berhasil dibuat
-        if voucher_diskon > 0:
-            consume_user_voucher_api(chat_id)
-            print(f"[API] ✅ Voucher user {chat_id} consumed setelah order {resi}")
+# ✅ Consume diskon setelah order berhasil
+# 1. Kupon new user → PENDING
+if get_coupon_status(chat_id) == "AVAILABLE":
+    set_coupon_status_api(chat_id, "PENDING")
+    print(f"[API] ✅ Kupon new user {chat_id} → PENDING")
+
+# 2. Voucher rupiah user → hapus 1
+if voucher_rupiah > 0:
+    consume_user_voucher_api(chat_id)
+    print(f"[API] ✅ Voucher rupiah {chat_id} consumed")
+
+# 3. Lucky draw diskon → hapus
+if lucky_persen > 0:
+    consume_user_lucky_diskon_api(chat_id)
+    print(f"[API] ✅ Lucky draw diskon {chat_id} consumed")
 
         return jsonify({
             "status": "OK", "message": "Order berhasil dibuat",
             "resi": resi, "harga_final": harga_final,
             "harga_final_str": f"Rp {harga_final:,}", "paket": nama,
-            "voucher_diskon": voucher_diskon,
+            "voucher_diskon": voucher_rupiah,
             "waktu": f"{hari}, {tanggal} {jam}"
         })
     except Exception as e:
