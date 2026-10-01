@@ -4506,7 +4506,7 @@ def check_bot_status_health():
 
 threading.Thread(target=check_bot_status_health, daemon=True).start()
 
-@bot.message_handler(func=lambda message: True, content_types=['text'])
+@bot.message_handler(func=lambda message: not (message.text and message.text.startswith('/')), content_types=['text'])
 def handle_text_and_reviews(message):
     chat_id = message.chat.id
     if message.chat.type != 'private':
