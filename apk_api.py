@@ -756,32 +756,6 @@ def create_order():
     except Exception as e:
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
-# ✅ Consume diskon setelah order berhasil
-# 1. Kupon new user → PENDING
-if get_coupon_status(chat_id) == "AVAILABLE":
-    set_coupon_status_api(chat_id, "PENDING")
-    print(f"[API] ✅ Kupon new user {chat_id} → PENDING")
-
-# 2. Voucher rupiah user → hapus 1
-if voucher_rupiah > 0:
-    consume_user_voucher_api(chat_id)
-    print(f"[API] ✅ Voucher rupiah {chat_id} consumed")
-
-# 3. Lucky draw diskon → hapus
-if lucky_persen > 0:
-    consume_user_lucky_diskon_api(chat_id)
-    print(f"[API] ✅ Lucky draw diskon {chat_id} consumed")
-
-return jsonify({
-    "status": "OK", "message": "Order berhasil dibuat",
-    "resi": resi, "harga_final": harga_final,
-    "harga_final_str": f"Rp {harga_final:,}", "paket": nama,
-    "voucher_diskon": voucher_rupiah,
-    "waktu": f"{hari}, {tanggal} {jam}"
-})
-    except Exception as e:
-        return jsonify({"status": "ERROR", "message": str(e)}), 500
-
 @app.route('/api/upload-bukti', methods=['POST'])
 def upload_bukti():
     try:
