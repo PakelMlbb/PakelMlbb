@@ -4515,6 +4515,10 @@ def handle_text_and_reviews(message):
     user = message.from_user
     l = get_lang(user)
     txt = message.text.strip()
+    
+    # ⚠️ FIX: Skip command yang diawali "/" — biar gak ketangkep handler ini
+    if txt.startswith('/'):
+        return
 
     upper_txt = txt.upper().strip()
     if upper_txt.startswith("VOUCHER "):
