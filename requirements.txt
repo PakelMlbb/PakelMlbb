@@ -1,6 +1,8 @@
-# force rebuild v4
+# force rebuild V Terbaru
 pyTelegramBotAPI
 groq
 matplotlib
 flask
 flask-cors
+waitress
+requests

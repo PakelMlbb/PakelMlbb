@@ -1,5 +1,5 @@
 # =====================================================================================
-#  PAKEL MLBBSTORE — APK API SERVER (v6 — FULL FITUR + CANCEL ORDER + CEK USER + VOUCHER)
+#  PAKEL MLBBSTORE — APK API SERVER (v7 — FULL FITUR + POIN + CUSTOM PAKET + RESTOCK)
 # =====================================================================================
 
 from flask import Flask, request, jsonify
@@ -31,13 +31,17 @@ F_REFERRALS = os.path.join(DATA_DIR, "referrals.txt")
 F_SPINLOG = os.path.join(DATA_DIR, "spin_log.txt")
 F_PROOFS = os.path.join(DATA_DIR, "proofs")
 F_LASTTIER = os.path.join(DATA_DIR, "last_tier.txt")
+# ---- FILE BARU v7 ----
+F_CUSTOM_PAKET = os.path.join(DATA_DIR, "custom_paket.txt")
+F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
+F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
 
 ADMIN_TELEGRAM_ID = 8772023108
 GROUP_PAY_ID = "@Paysukses"
 GROUP_PAY_TOPIC_ID = 5
 
 # =====================================================================================
-#  KONFIGURASI LUCKY DRAW (SAMA DENGAN BOT)
+#  KONFIGURASI LUCKY DRAW
 # =====================================================================================
 LUCKY_DRAW_COOLDOWN_JAM = 24
 LUCKY_DRAW_HADIAH = [
@@ -52,7 +56,7 @@ LUCKY_DRAW_HADIAH = [
 ]
 
 # =====================================================================================
-#  DATA PAKET (SAMA DENGAN BOT)
+#  DATA PAKET DEFAULT
 # =====================================================================================
 MASTER_PAKET = {
     'buy_natural': ("Natural Balance (30 Hari)", 120000, "Rp 120.000", 45, "🎯 Damage disesuaikan, aman & senyap."),
@@ -68,6 +72,12 @@ MASTER_PAKET = {
 DEFAULT_STOK = {
     'buy_sultan': 8, 'buy_pro': 45, 'buy_permanent': 12, 'buy_natural': 35,
     'buy_lifetimesafe': 20, 'buy_light': 60, 'buy_semisafe': 75, 'buy_semiprivate': 70,
+}
+
+KATEGORI_MAP = {
+    'buy_sultan': 'sultan', 'buy_pro': 'pro', 'buy_permanent': 'sultan',
+    'buy_natural': 'safe', 'buy_lifetimesafe': 'safe',
+    'buy_light': 'murah', 'buy_semisafe': 'murah', 'buy_semiprivate': 'murah'
 }
 
 app = Flask(__name__)
@@ -174,8 +184,8 @@ def count_user_success_orders(chat_id):
     except FileNotFoundError:
         pass
     return total
+
 def set_coupon_status_api(chat_id, status_baru):
-    """Update status kupon user di coupons.txt."""
     try:
         chat_id_str = str(chat_id)
         rows = []
@@ -202,9 +212,7 @@ def set_coupon_status_api(chat_id, status_baru):
     except Exception as e:
         print(f"[API] set_coupon_status_api error: {e}")
 
-
 def consume_user_lucky_diskon_api(chat_id):
-    """Hapus 1 lucky draw diskon user (DISKON prefix) setelah dipakai."""
     try:
         if not os.path.exists(F_USER_VOUCHER):
             return
@@ -223,6 +231,7 @@ def consume_user_lucky_diskon_api(chat_id):
         print(f"[API] ✅ Lucky draw diskon {chat_id} consumed")
     except Exception as e:
         print(f"[API] consume_user_lucky_diskon_api error: {e}")
+
 def get_coupon_status(chat_id):
     try:
         if not os.path.exists(F_COUPONS):
@@ -236,11 +245,7 @@ def get_coupon_status(chat_id):
         pass
     return "AVAILABLE"
 
-# =====================================================================================
-#  FUNGSI BARU — VOUCHER USER (FIX BUG VOUCHER GAK KEPOTONG)
-# =====================================================================================
 def get_user_voucher_rupiah(chat_id):
-    """Baca voucher RUPIAH user (VOUCHER_ prefix)."""
     total = 0
     try:
         if not os.path.exists(F_USER_VOUCHER):
@@ -259,7 +264,6 @@ def get_user_voucher_rupiah(chat_id):
     return total
 
 def get_user_lucky_diskon_persen(chat_id):
-    """Baca diskon PERSEN dari lucky draw (DISKON prefix)."""
     total_persen = 0
     try:
         if not os.path.exists(F_USER_VOUCHER):
@@ -279,7 +283,6 @@ def get_user_lucky_diskon_persen(chat_id):
     return total_persen
 
 def get_user_voucher_list(chat_id):
-    """Baca semua voucher aktif user, return list of dict."""
     vouchers = []
     try:
         if not os.path.exists(F_USER_VOUCHER):
@@ -300,7 +303,6 @@ def get_user_voucher_list(chat_id):
     return vouchers
 
 def consume_user_voucher_api(chat_id):
-    """Hapus 1 voucher user (yang pertama ditemukan) setelah dipakai order."""
     try:
         if not os.path.exists(F_USER_VOUCHER):
             return
@@ -504,13 +506,82 @@ def add_user_points(chat_id, amount, alasan="Bonus"):
         try:
             now = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
             with open(F_POINTLOG, "a") as f:
-                f.write(f"{chat_id}|{now}|+{amount}|{alasan}\n")
+                f.write(f"{chat_id}|{now}|{amount}|{alasan}\n")
         except Exception:
             pass
         return new_total
     except Exception as e:
         print(f"[API] add_user_points error: {e}")
         return None
+
+# =====================================================================================
+#  HELPER BARU v7 — CUSTOM PAKET + BLACKLIST
+# =====================================================================================
+def read_custom_paket_api():
+    paket = {}
+    try:
+        if not os.path.exists(F_CUSTOM_PAKET):
+            return paket
+        with open(F_CUSTOM_PAKET, "r") as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) >= 7:
+                    kode = parts[0]
+                    try:
+                        paket[kode] = {
+                            'nama': parts[1],
+                            'harga': int(parts[2]),
+                            'poin': int(parts[3]),
+                            'deskripsi': parts[4],
+                            'kategori': parts[5],
+                            'stok_default': int(parts[6]),
+                        }
+                    except ValueError:
+                        pass
+    except Exception as e:
+        print(f"[API] read_custom_paket_api error: {e}")
+    return paket
+
+def read_blacklist_api():
+    bl = set()
+    try:
+        if not os.path.exists(F_BLACKLIST):
+            return bl
+        with open(F_BLACKLIST, "r") as f:
+            for line in f:
+                kode = line.strip()
+                if kode:
+                    bl.add(kode)
+    except Exception as e:
+        print(f"[API] read_blacklist_api error: {e}")
+    return bl
+
+def get_all_paket_combined_api():
+    """Gabung default + custom, minus blacklist."""
+    bl = read_blacklist_api()
+    hasil = {}
+    for kode, data in MASTER_PAKET.items():
+        if kode in bl:
+            continue
+        nama, harga, harga_str, poin, deskripsi = data
+        hasil[kode] = {
+            'nama': nama, 'harga': harga, 'harga_str': harga_str,
+            'poin': poin, 'deskripsi': deskripsi,
+            'kategori': KATEGORI_MAP.get(kode, 'all'),
+            'is_custom': False,
+        }
+    custom = read_custom_paket_api()
+    for kode, p in custom.items():
+        if kode in bl:
+            continue
+        harga_str = "Rp " + format(p['harga'], ",").replace(",", ".")
+        hasil[kode] = {
+            'nama': p['nama'], 'harga': p['harga'], 'harga_str': harga_str,
+            'poin': p['poin'], 'deskripsi': p['deskripsi'],
+            'kategori': p['kategori'],
+            'is_custom': True,
+        }
+    return hasil
 
 # =====================================================================================
 #  AUTO-CREATE FILES & FOLDER
@@ -543,15 +614,23 @@ def ensure_stocks_file():
                 print(f"[API] ⚠️ Read error: {e}")
 
         changed = False
+        # Paket default
         for code, default_val in DEFAULT_STOK.items():
             if code not in existing or existing[code] <= 0:
                 existing[code] = default_val
+                changed = True
+        # Paket custom
+        custom = read_custom_paket_api()
+        for code, p in custom.items():
+            if code not in existing or existing[code] <= 0:
+                existing[code] = p.get('stok_default', 50)
                 changed = True
 
         if changed or not os.path.exists(F_STOCKS):
             with open(F_STOCKS, "w") as f:
                 now_ts = int(time.time())
-                for code in MASTER_PAKET.keys():
+                all_codes = set(list(MASTER_PAKET.keys()) + list(custom.keys()))
+                for code in all_codes:
                     stok = existing.get(code, DEFAULT_STOK.get(code, 50))
                     f.write(f"{code}|{stok}|{now_ts}\n")
             print(f"[API] ✅ WROTE stocks.txt at {F_STOCKS}")
@@ -571,7 +650,7 @@ def ensure_proofs_folder():
         return False
 
 # =====================================================================================
-#  TELEGRAM SEND PHOTO / MESSAGE
+#  TELEGRAM SEND
 # =====================================================================================
 def send_photo_to_telegram(filepath, caption, reply_markup=None, chat_id=GROUP_PAY_ID, thread_id=GROUP_PAY_TOPIC_ID):
     try:
@@ -579,11 +658,7 @@ def send_photo_to_telegram(filepath, caption, reply_markup=None, chat_id=GROUP_P
             print("[API] ❌ TELEGRAM_TOKEN kosong!")
             return False, "Token bot tidak tersedia"
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-        data = {
-            'chat_id': chat_id,
-            'caption': caption,
-            'parse_mode': 'HTML',
-        }
+        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'}
         if thread_id:
             data['message_thread_id'] = thread_id
         if reply_markup:
@@ -621,7 +696,7 @@ def home():
     return jsonify({
         "status": "OK",
         "message": "Pakel MlbbStore APK API",
-        "version": "6.0",
+        "version": "7.0",
         "time": datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S WIB')
     })
 
@@ -630,18 +705,27 @@ def get_paket():
     ensure_stocks_file()
     flashsale_diskon, flashsale_sisa = read_flashsale()
     paket_list = []
-    for kode, data in MASTER_PAKET.items():
-        nama, harga, harga_str, poin, deskripsi = data
+    all_paket = get_all_paket_combined_api()
+
+    for kode, data in all_paket.items():
         stok = get_stok(kode)
-        harga_final = harga
+        harga_final = data['harga']
         if flashsale_diskon > 0:
-            harga_final = int(harga * (100 - flashsale_diskon) / 100)
+            harga_final = int(harga_final * (100 - flashsale_diskon) / 100)
         paket_list.append({
-            "kode": kode, "nama": nama, "harga": harga,
-            "harga_str": harga_str, "harga_final": harga_final,
-            "harga_final_str": f"Rp {harga_final:,}", "poin": poin,
-            "stok": stok, "deskripsi": deskripsi,
-            "flashsale": flashsale_diskon > 0, "flashsale_diskon": flashsale_diskon
+            "kode": kode,
+            "nama": data['nama'],
+            "harga": data['harga'],
+            "harga_str": data['harga_str'],
+            "harga_final": harga_final,
+            "harga_final_str": f"Rp {harga_final:,}".replace(",", "."),
+            "poin": data['poin'],
+            "stok": stok,
+            "deskripsi": data['deskripsi'],
+            "kategori": data['kategori'],
+            "is_custom": data['is_custom'],
+            "flashsale": flashsale_diskon > 0,
+            "flashsale_diskon": flashsale_diskon
         })
     return jsonify({"status": "OK", "paket": paket_list,
                     "flashsale_diskon": flashsale_diskon,
@@ -655,6 +739,7 @@ def create_order():
         paket_kode = data.get('paket_kode')
         payment_method = data.get('payment_method', 'TRANSFER')
 
+        # Validasi chat id
         if not chat_id or not chat_id.isdigit():
             return jsonify({"status": "ERROR", "message": "Chat ID tidak valid"}), 400
         if len(chat_id) < 8 or len(chat_id) > 15:
@@ -664,10 +749,23 @@ def create_order():
         if chat_id in ['12345678', '123456789', '1234567890', '11111111', '00000000']:
             return jsonify({"status": "ERROR", "message": "Chat ID terdeteksi palsu"}), 400
 
-        if paket_kode not in MASTER_PAKET:
+        # Lookup paket (default + custom)
+        all_paket = get_all_paket_combined_api()
+        if paket_kode not in all_paket:
             return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 400
 
-        # Cek apakah user masih ada order PENDING - anti dobel order
+        paket_data = all_paket[paket_kode]
+        nama = paket_data['nama']
+        harga = paket_data['harga']
+        harga_str = paket_data['harga_str']
+        poin = paket_data['poin']
+        is_custom = paket_data['is_custom']
+
+        stok = get_stok(paket_kode)
+        if stok <= 0:
+            return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
+
+        # Cek order PENDING — anti dobel
         try:
             with open(F_ORDERS, "r") as f:
                 for line in f:
@@ -680,12 +778,62 @@ def create_order():
         except FileNotFoundError:
             pass
 
-        nama, harga, harga_str, poin, _ = MASTER_PAKET[paket_kode]
-        stok = get_stok(paket_kode)
-        if stok <= 0:
-            return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
+        # ============= ORDER VIA POIN =============
+        if payment_method == "POIN":
+            poin_dibutuhkan = poin
+            saldo_poin = read_points(chat_id)
+            if saldo_poin < poin_dibutuhkan:
+                return jsonify({
+                    "status": "ERROR",
+                    "message": "Poin tidak cukup! Butuh " + str(poin_dibutuhkan) + " poin, saldo kamu " + str(saldo_poin) + " poin."
+                }), 400
+            # Potong poin
+            add_user_points(chat_id, -poin_dibutuhkan, "Tukar Paket " + nama)
 
-        # ========== HITUNG HARGA FINAL ==========
+            # Generate resi & order BERHASIL
+            resi = "PKL-MLBB-" + str(random.randint(10000, 99999))
+            now = datetime.now(WIB)
+            tanggal = now.strftime('%d-%m-%Y')
+            hari_map = {'Mon':'Senin','Tue':'Selasa','Wed':'Rabu','Thu':'Kamis','Fri':'Jumat','Sat':'Sabtu','Sun':'Minggu'}
+            hari = hari_map.get(now.strftime('%a'), now.strftime('%a'))
+            jam = now.strftime('%H:%M:%S WIB')
+            ts = int(now.timestamp())
+
+            order_line = (str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|" +
+                          str(poin_dibutuhkan) + " POIN|" + resi + "|BERHASIL|" + str(ts) +
+                          "|POIN|" + str(poin_dibutuhkan) + "|0\n")
+            with open(F_ORDERS, "a") as f:
+                f.write(order_line)
+
+            # Notif admin
+            try:
+                send_message_to_telegram(
+                    ADMIN_TELEGRAM_ID,
+                    "🪙 <b>ORDER PAKAI POIN!</b>\n\n" +
+                    "👤 Chat ID: <code>" + str(chat_id) + "</code>\n" +
+                    "📦 Paket: <b>" + nama + "</b>\n" +
+                    "🪙 Poin Terpakai: " + str(poin_dibutuhkan) + "\n" +
+                    "💰 Saldo Sisa: " + str(saldo_poin - poin_dibutuhkan) + " poin\n" +
+                    "🔑 Resi: <code>" + resi + "</code>\n" +
+                    "⏱️ " + hari + ", " + tanggal + " " + jam + "\n\n" +
+                    "<i>Order BERHASIL otomatis. Kirim script ke user!</i>"
+                )
+            except Exception as e:
+                print(f"[API] notif admin poin error: {e}")
+
+            return jsonify({
+                "status": "OK",
+                "message": "Order pakai poin berhasil!",
+                "resi": resi,
+                "harga_final": poin_dibutuhkan,
+                "harga_final_str": str(poin_dibutuhkan) + " Poin",
+                "paket": nama,
+                "saldo_poin_sisa": saldo_poin - poin_dibutuhkan,
+                "waktu": hari + ", " + tanggal + " " + jam,
+                "payment_method": "POIN"
+            })
+
+        # ============= ORDER VIA TRANSFER =============
         harga_final = harga
         diskon_detail = []
 
@@ -701,7 +849,7 @@ def create_order():
             harga_final = int(harga_final * (100 - diskon_tier) / 100)
             diskon_detail.append("Tier -" + str(diskon_tier) + "%")
 
-        # 3. Kupon new user Rp 10.000
+        # 3. Kupon new user
         if get_coupon_status(chat_id) == "AVAILABLE":
             harga_final -= 10000
             diskon_detail.append("KuponNewUser -Rp10.000")
@@ -729,19 +877,19 @@ def create_order():
         jam = now.strftime('%H:%M:%S WIB')
         ts = int(now.timestamp())
 
-        order_line = str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|Rp " + str(harga_final) + "|" + resi + "|PENDING|" + str(ts) + "|" + payment_method + "|0|0\n"
+        order_line = (str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|Rp " +
+                      str(harga_final) + "|" + resi + "|PENDING|" + str(ts) + "|" +
+                      payment_method + "|0|0\n")
         with open(F_ORDERS, "a") as f:
             f.write(order_line)
 
-        # Consume diskon setelah order berhasil
+        # Consume diskon
         if get_coupon_status(chat_id) == "AVAILABLE":
             set_coupon_status_api(chat_id, "PENDING")
             print("[API] Kupon new user " + str(chat_id) + " -> PENDING")
-
         if voucher_rupiah > 0:
             consume_user_voucher_api(chat_id)
             print("[API] Voucher rupiah " + str(chat_id) + " consumed")
-
         if lucky_persen > 0:
             consume_user_lucky_diskon_api(chat_id)
             print("[API] Lucky draw diskon " + str(chat_id) + " consumed")
@@ -751,9 +899,13 @@ def create_order():
             "resi": resi, "harga_final": harga_final,
             "harga_final_str": "Rp " + str(harga_final), "paket": nama,
             "voucher_diskon": voucher_rupiah,
-            "waktu": hari + ", " + tanggal + " " + jam
+            "waktu": hari + ", " + tanggal + " " + jam,
+            "payment_method": "TRANSFER"
         })
     except Exception as e:
+        print(f"[API] create_order error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 @app.route('/api/upload-bukti', methods=['POST'])
@@ -765,7 +917,6 @@ def upload_bukti():
 
         if not chat_id or not resi:
             return jsonify({"status": "ERROR", "message": "Chat ID & Resi wajib diisi"}), 400
-
         if 'foto' not in request.files:
             return jsonify({"status": "ERROR", "message": "File foto tidak ditemukan"}), 400
 
@@ -776,7 +927,6 @@ def upload_bukti():
         order = get_order_by_resi(resi)
         if not order:
             return jsonify({"status": "ERROR", "message": "Resi tidak ditemukan"}), 404
-
         if order['status'] != 'PENDING':
             return jsonify({"status": "ERROR", "message": f"Order sudah diproses ({order['status']})"}), 400
 
@@ -833,7 +983,6 @@ def cek_resi():
 
 @app.route('/api/cek-pending', methods=['GET'])
 def cek_pending():
-    """Cek apakah user masih ada order PENDING."""
     chat_id = request.args.get('chat_id', '').strip()
     if not chat_id:
         return jsonify({"status": "ERROR", "message": "Chat ID wajib diisi"}), 400
@@ -844,11 +993,8 @@ def cek_pending():
                 parts = line.strip().split('|')
                 if len(parts) >= 8 and parts[0] == str(chat_id) and parts[7].strip() == "PENDING":
                     pending.append({
-                        'resi': parts[6],
-                        'paket': parts[4],
-                        'harga': parts[5],
-                        'tanggal': parts[1],
-                        'jam': parts[3]
+                        'resi': parts[6], 'paket': parts[4], 'harga': parts[5],
+                        'tanggal': parts[1], 'jam': parts[3]
                     })
     except FileNotFoundError:
         pass
@@ -856,7 +1002,6 @@ def cek_pending():
 
 @app.route('/api/cancel-order', methods=['POST'])
 def cancel_order():
-    """Batalkan order PENDING milik user."""
     try:
         data = request.json
         chat_id = str(data.get('chat_id', '')).strip()
@@ -924,12 +1069,8 @@ def api_referral():
     link = f"https://t.me/{bot_username}?start=ref_{chat_id}"
     return jsonify({
         "status": "OK",
-        "data": {
-            "total_ref": total,
-            "bonus_cair": bonus_cair,
-            "link": link,
-            "bot_username": bot_username
-        }
+        "data": {"total_ref": total, "bonus_cair": bonus_cair,
+                 "link": link, "bot_username": bot_username}
     })
 
 @app.route('/api/referral/register', methods=['POST'])
@@ -960,11 +1101,7 @@ def api_lucky_draw():
         sisa_detik = max(0, (LUCKY_DRAW_COOLDOWN_JAM * 3600) - (time.time() - last))
     return jsonify({
         "status": "OK",
-        "data": {
-            "can_spin": can,
-            "last_spin": last,
-            "sisa_detik": int(sisa_detik)
-        }
+        "data": {"can_spin": can, "last_spin": last, "sisa_detik": int(sisa_detik)}
     })
 
 @app.route('/api/lucky-draw/spin', methods=['POST'])
@@ -976,18 +1113,10 @@ def api_lucky_draw_spin():
             return jsonify({"status": "ERROR", "message": "Chat ID tidak valid"}), 400
         if not can_spin_now(chat_id):
             return jsonify({"status": "ERROR", "message": "Kamu sudah spin hari ini!"}), 400
-
         hadiah = roll_lucky_draw()
         label, tipe, nilai, _ = hadiah
         save_spin(chat_id)
-
-        result = {
-            "status": "OK",
-            "hadiah": label,
-            "tipe": tipe,
-            "nilai": nilai
-        }
-
+        result = {"status": "OK", "hadiah": label, "tipe": tipe, "nilai": nilai}
         if tipe == "poin":
             new_total = add_user_points(chat_id, nilai, "Hadiah Lucky Draw")
             result['total_poin'] = new_total
@@ -1016,7 +1145,6 @@ def api_lucky_draw_spin():
                 )
             except Exception:
                 pass
-
         return jsonify(result)
     except Exception as e:
         return jsonify({"status": "ERROR", "message": str(e)}), 500
@@ -1063,9 +1191,6 @@ def get_vouchers():
                           "sisa": v['max'] - v['terpakai'], "expired": v['expired']})
     return jsonify({"status": "OK", "vouchers": aktif})
 
-# =====================================================================================
-#  ENDPOINT BARU — CEK USER TELEGRAM (VALIDASI CHAT ID + AUTO-CARI NAMA)
-# =====================================================================================
 @app.route('/api/cek-user', methods=['GET'])
 def cek_user():
     chat_id = request.args.get('chat_id', '').strip()
@@ -1083,8 +1208,7 @@ def cek_user():
             return jsonify({
                 "status": "OK",
                 "user": {
-                    "chat_id": chat_id,
-                    "nama": nama.strip(),
+                    "chat_id": chat_id, "nama": nama.strip(),
                     "username": chat.get('username', ''),
                     "type": chat.get('type', 'private')
                 }
@@ -1095,32 +1219,78 @@ def cek_user():
         print(f"[API] cek_user error: {e}")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
-# =====================================================================================
-#  ENDPOINT BARU — LIST VOUCHER USER (UNTUK APK)
-# =====================================================================================
 @app.route('/api/user-vouchers', methods=['GET'])
 def api_user_vouchers():
-    """Baca voucher aktif user dari user_voucher.txt + total diskon."""
     chat_id = request.args.get('chat_id', '').strip()
     if not chat_id:
         return jsonify({"status": "ERROR", "message": "Chat ID wajib diisi"}), 400
-
     vouchers = get_user_voucher_list(chat_id)
     total_diskon = sum(v['diskon'] for v in vouchers)
-
     return jsonify({
-        "status": "OK",
-        "vouchers": vouchers,
-        "total_diskon": total_diskon,
-        "count": len(vouchers)
+        "status": "OK", "vouchers": vouchers,
+        "total_diskon": total_diskon, "count": len(vouchers)
     })
+
+# =====================================================================================
+#  ENDPOINT BARU v7 — RESTOCK LOG (buat notif restock di APK)
+# =====================================================================================
+@app.route('/api/restock-log', methods=['GET'])
+def api_restock_log():
+    """Baca restock log terbaru buat notif di APK."""
+    try:
+        limit = int(request.args.get('limit', 5))
+        if limit < 1:
+            limit = 1
+        if limit > 50:
+            limit = 50
+
+        if not os.path.exists(F_RESTOCK_LOG):
+            return jsonify({"status": "OK", "restock": [], "count": 0})
+
+        with open(F_RESTOCK_LOG, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+
+        recent = lines[-limit:]
+        restock = []
+        # Ambil nama paket dari MASTER atau custom
+        all_paket = get_all_paket_combined_api()
+
+        for ln in reversed(recent):
+            parts = ln.split('|')
+            if len(parts) >= 5:
+                kode = parts[1]
+                nama_paket = all_paket.get(kode, {}).get('nama', kode)
+                try:
+                    stok_lama = int(parts[2])
+                    stok_baru = int(parts[3])
+                except ValueError:
+                    stok_lama = 0
+                    stok_baru = 0
+                restock.append({
+                    "timestamp": parts[0],
+                    "kode": kode,
+                    "nama": nama_paket,
+                    "stok_lama": stok_lama,
+                    "stok_baru": stok_baru,
+                    "trigger": parts[4],
+                })
+
+        return jsonify({
+            "status": "OK",
+            "restock": restock,
+            "count": len(restock),
+            "total_log": len(lines)
+        })
+    except Exception as e:
+        print(f"[API] api_restock_log error: {e}")
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 # =====================================================================================
 #  RUN — STANDALONE MODE
 # =====================================================================================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    print(f"[INFO] Pakel MlbbStore APK API v6 running on port {port}")
+    print(f"[INFO] Pakel MlbbStore APK API v7 running on port {port}")
     ensure_stocks_file()
     ensure_proofs_folder()
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)

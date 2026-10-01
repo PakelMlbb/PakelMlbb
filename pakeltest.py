@@ -3567,6 +3567,11 @@ def loading_toast(call_id, text="⏳ Mohon tunggu sebentar, sistem sedang mempro
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler_master(call):
+    # ===== TAMBAHAN CUSTOM PAKET v1.0 =====
+    if call.data and call.data.startswith(('cp_del_', 'cp_conf_', 'cp_cancel')):
+        return handle_custom_paket_cb(call)
+    # ===== END TAMBAHAN =====
+    
     save_user(call.message.chat.id)
     user = call.from_user
     l = get_lang(user)
@@ -4749,6 +4754,524 @@ def cmd_apk_stats(message):
 
 print("[INFO] Pakel MlbbStore v10 VOUCHER-MGMT + AUTO-BC Edition Berhasil Dijalankan...")
 
+# =====================================================================================
+#  FITUR BARU — CUSTOM PAKET + RESTOCK BROADCAST
+#  Ditambah: 2026-10-01
+# =====================================================================================
+
+F_CUSTOM_PAKET = os.path.join(DATA_DIR, "custom_paket.txt")
+F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
+F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
+
+
+# ---- HELPER: BACA/SIMPAN CUSTOM PAKET ----
+def read_custom_paket():
+    paket = {}
+    try:
+        if not os.path.exists(F_CUSTOM_PAKET):
+            return paket
+        with open(F_CUSTOM_PAKET, "r") as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) >= 7:
+                    kode = parts[0]
+                    paket[kode] = {
+                        'nama': parts[1],
+                        'harga': int(parts[2]),
+                        'poin': int(parts[3]),
+                        'deskripsi': parts[4],
+                        'kategori': parts[5],
+                        'stok': int(parts[6]),
+                    }
+    except Exception as e:
+        log_error("read_custom_paket", e)
+    return paket
+
+
+def save_custom_paket(paket_dict):
+    try:
+        rows = []
+        for kode, p in paket_dict.items():
+            rows.append(f"{kode}|{p['nama']}|{p['harga']}|{p['poin']}|{p['deskripsi']}|{p['kategori']}|{p['stok']}")
+        with open(F_CUSTOM_PAKET, "w") as f:
+            f.write("\n".join(rows) + ("\n" if rows else ""))
+        return True
+    except Exception as e:
+        log_error("save_custom_paket", e)
+        return False
+
+
+def read_blacklist():
+    bl = set()
+    try:
+        if not os.path.exists(F_BLACKLIST):
+            return bl
+        with open(F_BLACKLIST, "r") as f:
+            for line in f:
+                kode = line.strip()
+                if kode:
+                    bl.add(kode)
+    except Exception as e:
+        log_error("read_blacklist", e)
+    return bl
+
+
+def save_blacklist(bl):
+    try:
+        with open(F_BLACKLIST, "w") as f:
+            f.write("\n".join(sorted(bl)) + ("\n" if bl else ""))
+        return True
+    except Exception as e:
+        log_error("save_blacklist", e)
+        return False
+
+
+def get_all_paket_combined():
+    """Gabung MASTER_PAKET + custom, minus blacklist."""
+    bl = read_blacklist()
+    hasil = {}
+    for kode, data in MASTER_PAKET.items():
+        if kode in bl:
+            continue
+        hasil[kode] = {
+            'nama': data[0],
+            'harga': data[1],
+            'harga_str': data[2],
+            'poin': data[3],
+            'deskripsi': data[4],
+            'kategori': 'default',
+            'stok': get_stock(kode),
+            'is_custom': False,
+        }
+    custom = read_custom_paket()
+    for kode, p in custom.items():
+        p['is_custom'] = True
+        p['harga_str'] = "Rp " + format(p['harga'], ",").replace(",", ".")
+        p['stok'] = get_stock(kode)
+        hasil[kode] = p
+    return hasil
+
+
+def write_restock_log(kode, stok_lama, stok_baru, trigger="manual"):
+    try:
+        now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
+        with open(F_RESTOCK_LOG, "a") as f:
+            f.write(f"{now_str}|{kode}|{stok_lama}|{stok_baru}|{trigger}\n")
+    except Exception as e:
+        log_error("write_restock_log", e)
+
+
+def broadcast_restock(kode, stok_lama, stok_baru, trigger="manual"):
+    """Broadcast notif restock ke semua user + channel/grup."""
+    try:
+        all_paket = get_all_paket_combined()
+        if kode in all_paket:
+            nama_paket = all_paket[kode]['nama']
+        elif kode in MASTER_PAKET:
+            nama_paket = MASTER_PAKET[kode][0]
+        else:
+            nama_paket = kode
+        now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S WIB')
+        emoji = "🔥" if stok_baru > stok_lama else "📦"
+        bc_text = (
+            f"{emoji} <b>RESTOCK PAKET MASUK!</b> {emoji}\n\n"
+            f"📦 Paket: <b>{nama_paket}</b>\n"
+            f"📊 Stok: <b>{stok_lama}</b> → <b>{stok_baru}</b>\n"
+            f"⏱️ Waktu: {now_str}\n\n"
+            f"⚡ Buruan order sebelum kehabisan!\n"
+            f"🛒 Checkout: @{bot.get_me().username}"
+        )
+        # 1. Broadcast ke semua user
+        try:
+            with open(F_USERS, "r") as f:
+                users = [line.strip() for line in f.read().splitlines() if line.strip()]
+            sukses = 0
+            for chat_id in set(users):
+                try:
+                    bot.send_message(chat_id, bc_text, parse_mode="HTML", disable_web_page_preview=True)
+                    sukses += 1
+                    time.sleep(0.05)
+                except Exception:
+                    pass
+            print(f"[RESTOCK-BC] {nama_paket}: {sukses}/{len(set(users))} user")
+        except FileNotFoundError:
+            pass
+        # 2. Post ke channel/grup
+        try:
+            bot.send_message(chat_id=GROUP_CHAT_ID, text=bc_text,
+                             message_thread_id=GROUP_TOPIC_ID,
+                             parse_mode="HTML", disable_web_page_preview=True)
+        except Exception as e:
+            log_error("broadcast_restock_channel", e)
+        # 3. Notif ke admin
+        try:
+            bot.send_message(ADMIN_TELEGRAM_ID,
+                f"✅ <b>Restock BC Selesai</b>\n\n📦 {nama_paket}\n📊 {stok_lama} → {stok_baru}\n🎯 {trigger}",
+                parse_mode="HTML")
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        log_error("broadcast_restock", e)
+        return False
+
+
+def broadcast_restock_async(kode, stok_lama, stok_baru, trigger="manual"):
+    threading.Thread(target=broadcast_restock, args=(kode, stok_lama, stok_baru, trigger), daemon=True).start()
+
+
+# =====================================================================================
+#  COMMAND: /buatpaket — Bikin paket baru
+# =====================================================================================
+@bot.message_handler(commands=['buatpaket'])
+def cmd_buatpaket(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Command ini khusus admin utama!")
+        return
+    text = message.text.replace('/buatpaket', '').strip()
+    if not text:
+        bot.reply_to(message,
+            "📝 <b>CARA PAKAI /buatpaket:</b>\n\n"
+            "<code>/buatpaket kode|nama|harga|poin|deskripsi|kategori|stok</code>\n\n"
+            "<b>Contoh:</b>\n"
+            "<code>/buatpaket buy_mega|Mega Sultan|300000|120|Damage dewa|sultan|50</code>\n\n"
+            "<b>Kategori:</b> sultan / pro / safe / murah\n"
+            "<b>Pemisah:</b> tanda pipe (|)\n"
+            "<b>Deskripsi kosong:</b> tulis tanda strip (-)",
+            parse_mode="HTML")
+        return
+    try:
+        parts = [p.strip() for p in text.split('|')]
+        if len(parts) < 7:
+            bot.reply_to(message, f"❌ Format salah! Butuh 7 bagian dipisah <code>|</code>. Kamu kasih {len(parts)}.", parse_mode="HTML")
+            return
+        kode = parts[0].lower().replace(' ', '_')
+        nama = parts[1]
+        harga = int(parts[2])
+        poin = int(parts[3])
+        deskripsi = parts[4] if parts[4] != '-' else "🎯 Paket custom"
+        kategori = parts[5].lower()
+        stok = int(parts[6])
+        if kategori not in ['sultan', 'pro', 'safe', 'murah']:
+            bot.reply_to(message, "❌ Kategori harus: sultan / pro / safe / murah")
+            return
+        if harga <= 0:
+            bot.reply_to(message, "❌ Harga harus > 0")
+            return
+        custom = read_custom_paket()
+        if kode in custom or kode in MASTER_PAKET:
+            bot.reply_to(message, f"❌ Paket <code>{kode}</code> udah ada!", parse_mode="HTML")
+            return
+        custom[kode] = {'nama': nama, 'harga': harga, 'poin': poin, 'deskripsi': deskripsi, 'kategori': kategori, 'stok': stok}
+        if save_custom_paket(custom):
+            set_stock(kode, stok)
+            bot.reply_to(message,
+                f"✅ <b>PAKET BERHASIL DIBUAT!</b>\n\n"
+                f"📦 Kode: <code>{kode}</code>\n"
+                f"🏷️ Nama: <b>{nama}</b>\n"
+                f"💰 Harga: Rp {format(harga, ',').replace(',', '.')}\n"
+                f"🪙 Poin: {poin}\n"
+                f"📁 Kategori: {kategori}\n"
+                f"📊 Stok: {stok}\n\n"
+                f"💡 Paket langsung muncul di APK & bot!",
+                parse_mode="HTML")
+            print(f"[BOT] ✅ Custom paket dibuat: {kode}")
+        else:
+            bot.reply_to(message, "❌ Gagal simpan paket!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ Format angka salah: {e}")
+    except Exception as e:
+        log_error("cmd_buatpaket", e)
+        bot.reply_to(message, f"❌ Error: {e}")
+
+
+# =====================================================================================
+#  COMMAND: /listpaket — List paket custom
+# =====================================================================================
+@bot.message_handler(commands=['listpaket'])
+def cmd_listpaket(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Khusus admin utama!")
+        return
+    custom = read_custom_paket()
+    if not custom:
+        bot.reply_to(message, "📭 Belum ada paket custom.\n\nKetik /buatpaket buat bikin baru.")
+        return
+    text = "📋 <b>DAFTAR PAKET CUSTOM</b>\n\n"
+    for kode, p in custom.items():
+        text += (f"📦 <code>{kode}</code>\n"
+                 f"   🏷️ {p['nama']}\n"
+                 f"   💰 Rp {format(p['harga'], ',').replace(',', '.')}\n"
+                 f"   🪙 {p['poin']} Poin\n"
+                 f"   📊 Stok: {get_stock(kode)}\n"
+                 f"   📁 {p['kategori']}\n\n")
+    text += f"📊 Total: <b>{len(custom)}</b> paket custom"
+    bot.reply_to(message, text, parse_mode="HTML")
+
+
+# =====================================================================================
+#  COMMAND: /hapuspaket — Hapus paket pake tombol inline
+# =====================================================================================
+@bot.message_handler(commands=['hapuspaket'])
+def cmd_hapuspaket(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Khusus admin utama!")
+        return
+    all_paket = get_all_paket_combined()
+    if not all_paket:
+        bot.reply_to(message, "📭 Belum ada paket.")
+        return
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for kode, p in all_paket.items():
+        is_custom = p.get('is_custom', False)
+        emoji = "🆕" if is_custom else "📦"
+        label = f"{emoji} {p['nama']} — Rp {format(p['harga'], ',').replace(',', '.')}"
+        if len(label) > 58:
+            label = label[:55] + "..."
+        markup.add(types.InlineKeyboardButton(text=label, callback_data=f"cp_del_{kode}"))
+    bot.reply_to(
+        message,
+        "🗑️ <b>PILIH PAKET YANG MAU DIHAPUS:</b>\n\n"
+        "📦 = Paket Default\n"
+        "🆕 = Paket Custom\n\n"
+        "⚠️ <i>Paket default gak bisa hapus permanen, cuma di-blacklist.</i>",
+        reply_markup=markup,
+        parse_mode="HTML")
+
+
+# =====================================================================================
+#  COMMAND: /unblacklist — Balikin paket default yang di-blacklist
+# =====================================================================================
+@bot.message_handler(commands=['unblacklist'])
+def cmd_unblacklist(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Khusus admin utama!")
+        return
+    kode = message.text.replace('/unblacklist', '').strip().lower()
+    if not kode:
+        bl = read_blacklist()
+        if not bl:
+            bot.reply_to(message, "📭 Blacklist kosong.")
+            return
+        text = "📋 <b>PAKET DEFAULT YANG DI-BLACKLIST:</b>\n\n"
+        for k in bl:
+            text += f"• <code>{k}</code>\n"
+        text += "\n💡 Balikin: <code>/unblacklist kode_paket</code>"
+        bot.reply_to(message, text, parse_mode="HTML")
+        return
+    bl = read_blacklist()
+    if kode not in bl:
+        bot.reply_to(message, f"❌ <code>{kode}</code> gak ada di blacklist.", parse_mode="HTML")
+        return
+    bl.discard(kode)
+    if save_blacklist(bl):
+        bot.reply_to(message, f"✅ Paket <code>{kode}</code> berhasil dibalikin!", parse_mode="HTML")
+    else:
+        bot.reply_to(message, "❌ Gagal simpan blacklist.")
+
+
+# =====================================================================================
+#  COMMAND: /restockbc — Restock semua + broadcast
+# =====================================================================================
+@bot.message_handler(commands=['restockbc'])
+def cmd_restockbc(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Khusus admin utama!")
+        return
+    all_paket = get_all_paket_combined()
+    if not all_paket:
+        bot.reply_to(message, "📭 Belum ada paket.")
+        return
+    stocks = _read_all_stocks()
+    changed = []
+    for kode in all_paket.keys():
+        stok_lama = stocks.get(kode, 0)
+        harga = all_paket[kode]['harga']
+        if harga < 100000:
+            stok_baru = random.randint(150, 250)
+        elif harga < 180000:
+            stok_baru = random.randint(80, 150)
+        else:
+            stok_baru = random.randint(30, 80)
+        stocks[kode] = stok_baru
+        changed.append((kode, stok_lama, stok_baru))
+        write_restock_log(kode, stok_lama, stok_baru, trigger="restockbc")
+    _write_all_stocks(stocks)
+    bot.reply_to(message, f"✅ <b>{len(changed)} paket berhasil di-restock!</b>\n\n📢 Sedang broadcast notif ke semua user...", parse_mode="HTML")
+    def _do_bc():
+        for kode, s_lama, s_baru in changed:
+            broadcast_restock(kode, s_lama, s_baru, trigger="restockbc")
+            time.sleep(1)
+    threading.Thread(target=_do_bc, daemon=True).start()
+
+
+# =====================================================================================
+#  COMMAND: /setstokbc — Set stok 1 paket + broadcast
+# =====================================================================================
+@bot.message_handler(commands=['setstokbc'])
+def cmd_setstokbc(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Khusus admin utama!")
+        return
+    args = message.text.replace('/setstokbc', '').strip().split()
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ Format: <code>/setstokbc kode_paket jumlah</code>\nContoh: <code>/setstokbc buy_sultan 100</code>", parse_mode="HTML")
+        return
+    kode = args[0].strip()
+    try:
+        angka = int(args[1])
+    except ValueError:
+        bot.reply_to(message, "❌ Jumlah harus angka.")
+        return
+    all_paket = get_all_paket_combined()
+    if kode not in all_paket:
+        bot.reply_to(message, f"❌ Paket <code>{kode}</code> gak ditemukan.", parse_mode="HTML")
+        return
+    stocks = _read_all_stocks()
+    stok_lama = stocks.get(kode, 0)
+    set_stock(kode, angka)
+    write_restock_log(kode, stok_lama, angka, trigger="setstokbc")
+    nama_paket = all_paket[kode]['nama']
+    bot.reply_to(message,
+        f"✅ Stok <b>{nama_paket}</b> di-set:\n📊 <b>{stok_lama}</b> → <b>{angka}</b>\n\n📢 Sedang broadcast...",
+        parse_mode="HTML")
+    broadcast_restock_async(kode, stok_lama, angka, trigger="setstokbc")
+
+
+# =====================================================================================
+#  COMMAND: /bcstok — Broadcast stok sekarang (manual trigger)
+# =====================================================================================
+@bot.message_handler(commands=['bcstok'])
+def cmd_bcstok(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Khusus admin utama!")
+        return
+    kode = message.text.replace('/bcstok', '').strip()
+    if not kode:
+        all_paket = get_all_paket_combined()
+        if not all_paket:
+            bot.reply_to(message, "📭 Belum ada paket.")
+            return
+        bot.reply_to(message, "📢 Broadcast stok SEMUA paket...")
+        def _do_bc():
+            for kode_p in all_paket.keys():
+                stok = get_stock(kode_p)
+                try:
+                    broadcast_restock(kode_p, stok, stok, trigger="bcstok_all")
+                    time.sleep(1)
+                except Exception:
+                    pass
+        threading.Thread(target=_do_bc, daemon=True).start()
+        return
+    all_paket = get_all_paket_combined()
+    if kode not in all_paket:
+        bot.reply_to(message, f"❌ Paket <code>{kode}</code> gak ditemukan.", parse_mode="HTML")
+        return
+    stok = get_stock(kode)
+    bot.reply_to(message, f"📢 Broadcast stok <b>{all_paket[kode]['nama']}</b>...", parse_mode="HTML")
+    broadcast_restock_async(kode, stok, stok, trigger="bcstok")
+
+
+# =====================================================================================
+#  COMMAND: /logrestock — Lihat history restock
+# =====================================================================================
+@bot.message_handler(commands=['logrestock'])
+def cmd_logrestock(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Khusus admin utama!")
+        return
+    if not os.path.exists(F_RESTOCK_LOG):
+        bot.reply_to(message, "📭 Belum ada history restock.")
+        return
+    try:
+        with open(F_RESTOCK_LOG, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        if not lines:
+            bot.reply_to(message, "📭 Belum ada history restock.")
+            return
+        recent = lines[-15:]
+        text = "📋 <b>HISTORY RESTOCK (15 terakhir)</b>\n\n"
+        for ln in reversed(recent):
+            parts = ln.split('|')
+            if len(parts) >= 5:
+                text += f"🕐 {parts[0]}\n📦 <code>{parts[1]}</code>\n📊 {parts[2]} → {parts[3]} ({parts[4]})\n\n"
+        text += f"📊 Total entri: {len(lines)}"
+        bot.reply_to(message, text, parse_mode="HTML")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Gagal: {e}")
+
+
+# =====================================================================================
+#  CALLBACK: Custom Paket Hapus (dipanggil dari callback_handler_master)
+# =====================================================================================
+def handle_custom_paket_cb(call):
+    data = call.data
+    chat_id = call.message.chat.id
+    message_id = call.message.message_id
+    try:
+        if data.startswith('cp_del_'):
+            kode = data.replace('cp_del_', '')
+            all_paket = get_all_paket_combined()
+            if kode not in all_paket:
+                bot.answer_callback_query(call.id, "❌ Paket gak ditemukan!", show_alert=True)
+                return
+            p = all_paket[kode]
+            is_custom = p.get('is_custom', False)
+            tipe = "🆕 Custom" if is_custom else "📦 Default"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("✅ YA, HAPUS", callback_data=f"cp_conf_{kode}"),
+                types.InlineKeyboardButton("❌ BATAL", callback_data="cp_cancel")
+            )
+            text = (
+                f"⚠️ <b>KONFIRMASI HAPUS PAKET</b>\n\n"
+                f"📦 Kode: <code>{kode}</code>\n"
+                f"🏷️ Nama: <b>{p['nama']}</b>\n"
+                f"💰 Harga: Rp {format(p['harga'], ',').replace(',', '.')}\n"
+                f"🪙 Poin: {p['poin']}\n"
+                f"📁 Tipe: {tipe}\n"
+                f"📊 Stok: {get_stock(kode)}\n\n"
+                f"<b>Yakin mau hapus paket ini?</b>"
+            )
+            try:
+                bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=markup, parse_mode="HTML")
+            except Exception:
+                bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML")
+            bot.answer_callback_query(call.id)
+            return
+        elif data.startswith('cp_conf_'):
+            kode = data.replace('cp_conf_', '')
+            custom = read_custom_paket()
+            if kode in custom:
+                del custom[kode]
+                save_custom_paket(custom)
+                tipe = "🆕 Custom (hapus permanen)"
+            else:
+                bl = read_blacklist()
+                bl.add(kode)
+                save_blacklist(bl)
+                tipe = "📦 Default (di-blacklist)"
+            text = (f"✅ <b>PAKET BERHASIL DIHAPUS!</b>\n\n📦 Kode: <code>{kode}</code>\n📁 Tipe: {tipe}\n\n💡 Paket udah gak muncul di APK & bot.")
+            try:
+                bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML")
+            except Exception:
+                bot.send_message(chat_id, text, parse_mode="HTML")
+            bot.answer_callback_query(call.id, text="✅ Paket dihapus!")
+            print(f"[BOT] ✅ Paket dihapus: {kode} ({tipe})")
+            return
+        elif data == 'cp_cancel':
+            try:
+                bot.edit_message_text(chat_id=chat_id, message_id=message_id, text="❌ <b>DIBATALKAN</b>\n\nPaket gak jadi dihapus.", parse_mode="HTML")
+                bot.answer_callback_query(call.id, "Dibatalkan")
+            except Exception:
+                pass
+            return
+    except Exception as e:
+        log_error("handle_custom_paket_cb", e)
+        try:
+            bot.answer_callback_query(call.id, f"❌ Error: {str(e)[:80]}", show_alert=True)
+        except Exception:
+            pass
 # FIX: Pindah polling ke dalam if __name__ biar gak auto-run saat di-import
 if __name__ == '__main__':
     try:
