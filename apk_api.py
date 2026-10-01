@@ -1,5 +1,5 @@
 # =====================================================================================
-#  PAKEL MLBBSTORE — APK API SERVER (v5 — FULL FITUR + CANCEL ORDER)
+#  PAKEL MLBBSTORE — APK API SERVER (v5 — FULL FITUR + CANCEL ORDER + CEK USER)
 # =====================================================================================
 
 from flask import Flask, request, jsonify
@@ -893,6 +893,40 @@ def get_vouchers():
             aktif.append({"kode": kode, "diskon": v['diskon'],
                           "sisa": v['max'] - v['terpakai'], "expired": v['expired']})
     return jsonify({"status": "OK", "vouchers": aktif})
+
+# =====================================================================================
+#  ENDPOINT BARU — CEK USER TELEGRAM (VALIDASI CHAT ID + AUTO-CARI NAMA)
+#  Fungsi: validasi Chat ID asli via Telegram getChat API
+#  Dipakai oleh index.html untuk auto-verify & tampilkan nama user
+# =====================================================================================
+@app.route('/api/cek-user', methods=['GET'])
+def cek_user():
+    chat_id = request.args.get('chat_id', '').strip()
+    if not chat_id or not chat_id.isdigit():
+        return jsonify({"status": "ERROR", "message": "Chat ID tidak valid"}), 400
+    if not TELEGRAM_TOKEN:
+        return jsonify({"status": "ERROR", "message": "Token bot belum diset"}), 500
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChat"
+        r = req.get(url, params={"chat_id": chat_id}, timeout=8)
+        data = r.json()
+        if data.get('ok'):
+            chat = data.get('result', {})
+            nama = ' '.join(filter(None, [chat.get('first_name'), chat.get('last_name')])) or chat.get('title') or 'User'
+            return jsonify({
+                "status": "OK",
+                "user": {
+                    "chat_id": chat_id,
+                    "nama": nama.strip(),
+                    "username": chat.get('username', ''),
+                    "type": chat.get('type', 'private')
+                }
+            })
+        else:
+            return jsonify({"status": "NOT_FOUND", "message": data.get('description', 'Tidak ditemukan')}), 200
+    except Exception as e:
+        print(f"[API] cek_user error: {e}")
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 # =====================================================================================
 #  RUN — STANDALONE MODE
