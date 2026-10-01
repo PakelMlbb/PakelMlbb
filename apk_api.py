@@ -667,7 +667,7 @@ def create_order():
         if paket_kode not in MASTER_PAKET:
             return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 400
 
-        # Cek apakah user masih ada order PENDING — anti dobel order
+        # Cek apakah user masih ada order PENDING - anti dobel order
         try:
             with open(F_ORDERS, "r") as f:
                 for line in f:
@@ -675,7 +675,7 @@ def create_order():
                     if len(parts) >= 8 and parts[0] == chat_id and parts[7].strip() == "PENDING":
                         return jsonify({
                             "status": "ERROR",
-                            "message": f"Kamu masih punya pesanan PENDING (Resi: {parts[6]}). Selesaikan atau batalkan dulu!"
+                            "message": "Kamu masih punya pesanan PENDING (Resi: " + parts[6] + "). Selesaikan atau batalkan dulu!"
                         }), 400
         except FileNotFoundError:
             pass
@@ -687,41 +687,41 @@ def create_order():
 
         # ========== HITUNG HARGA FINAL ==========
         harga_final = harga
-diskon_detail = []
+        diskon_detail = []
 
-# 1. Flash Sale (prioritas, tapi GAK skip diskon lain)
-flashsale_diskon, _ = read_flashsale()
-if flashsale_diskon > 0:
-    harga_final = int(harga_final * (100 - flashsale_diskon) / 100)
-    diskon_detail.append(f"FlashSale -{flashsale_diskon}%")
+        # 1. Flash Sale
+        flashsale_diskon, _ = read_flashsale()
+        if flashsale_diskon > 0:
+            harga_final = int(harga_final * (100 - flashsale_diskon) / 100)
+            diskon_detail.append("FlashSale -" + str(flashsale_diskon) + "%")
 
-# 2. Tier diskon
-tier_label, multiplier, diskon_tier = get_user_tier(chat_id)
-if diskon_tier > 0:
-    harga_final = int(harga_final * (100 - diskon_tier) / 100)
-    diskon_detail.append(f"Tier -{diskon_tier}%")
+        # 2. Tier diskon
+        tier_label, multiplier, diskon_tier = get_user_tier(chat_id)
+        if diskon_tier > 0:
+            harga_final = int(harga_final * (100 - diskon_tier) / 100)
+            diskon_detail.append("Tier -" + str(diskon_tier) + "%")
 
-# 3. Kupon new user (Rp 10.000)
-if get_coupon_status(chat_id) == "AVAILABLE":
-    harga_final -= 10000
-    diskon_detail.append("KuponNewUser -Rp10.000")
+        # 3. Kupon new user Rp 10.000
+        if get_coupon_status(chat_id) == "AVAILABLE":
+            harga_final -= 10000
+            diskon_detail.append("KuponNewUser -Rp10.000")
 
-# 4. Lucky Draw Diskon (persen)
-lucky_persen = get_user_lucky_diskon_persen(chat_id)
-if lucky_persen > 0:
-    harga_final = int(harga_final * (100 - lucky_persen) / 100)
-    diskon_detail.append(f"LuckyDraw -{lucky_persen}%")
+        # 4. Lucky Draw Diskon
+        lucky_persen = get_user_lucky_diskon_persen(chat_id)
+        if lucky_persen > 0:
+            harga_final = int(harga_final * (100 - lucky_persen) / 100)
+            diskon_detail.append("LuckyDraw -" + str(lucky_persen) + "%")
 
-# 5. Voucher user (rupiah)
-voucher_rupiah = get_user_voucher_rupiah(chat_id)
-if voucher_rupiah > 0:
-    harga_final -= voucher_rupiah
-    diskon_detail.append(f"Voucher -Rp{voucher_rupiah:,}")
+        # 5. Voucher user
+        voucher_rupiah = get_user_voucher_rupiah(chat_id)
+        if voucher_rupiah > 0:
+            harga_final -= voucher_rupiah
+            diskon_detail.append("Voucher -Rp" + str(voucher_rupiah))
 
-harga_final = max(0, harga_final)
-print(f"[API] 💰 Order {chat_id} - diskon: {', '.join(diskon_detail) if diskon_detail else 'NONE'}")
-        resi = f"PKL-MLBB-{random.randint(10000, 99999)}"
+        harga_final = max(0, harga_final)
+        print("[API] Order " + str(chat_id) + " - diskon: " + (", ".join(diskon_detail) if diskon_detail else "NONE"))
 
+        resi = "PKL-MLBB-" + str(random.randint(10000, 99999))
         now = datetime.now(WIB)
         tanggal = now.strftime('%d-%m-%Y')
         hari_map = {'Mon':'Senin','Tue':'Selasa','Wed':'Rabu','Thu':'Kamis','Fri':'Jumat','Sat':'Sabtu','Sun':'Minggu'}
@@ -729,9 +729,32 @@ print(f"[API] 💰 Order {chat_id} - diskon: {', '.join(diskon_detail) if diskon
         jam = now.strftime('%H:%M:%S WIB')
         ts = int(now.timestamp())
 
-        order_line = f"{chat_id}|{tanggal}|{hari}|{jam}|{nama}|Rp {harga_final:,}|{resi}|PENDING|{ts}|{payment_method}|0|0\n"
-with open(F_ORDERS, "a") as f:
-    f.write(order_line)
+        order_line = str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|Rp " + str(harga_final) + "|" + resi + "|PENDING|" + str(ts) + "|" + payment_method + "|0|0\n"
+        with open(F_ORDERS, "a") as f:
+            f.write(order_line)
+
+        # Consume diskon setelah order berhasil
+        if get_coupon_status(chat_id) == "AVAILABLE":
+            set_coupon_status_api(chat_id, "PENDING")
+            print("[API] Kupon new user " + str(chat_id) + " -> PENDING")
+
+        if voucher_rupiah > 0:
+            consume_user_voucher_api(chat_id)
+            print("[API] Voucher rupiah " + str(chat_id) + " consumed")
+
+        if lucky_persen > 0:
+            consume_user_lucky_diskon_api(chat_id)
+            print("[API] Lucky draw diskon " + str(chat_id) + " consumed")
+
+        return jsonify({
+            "status": "OK", "message": "Order berhasil dibuat",
+            "resi": resi, "harga_final": harga_final,
+            "harga_final_str": "Rp " + str(harga_final), "paket": nama,
+            "voucher_diskon": voucher_rupiah,
+            "waktu": hari + ", " + tanggal + " " + jam
+        })
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 # ✅ Consume diskon setelah order berhasil
 # 1. Kupon new user → PENDING
@@ -749,13 +772,13 @@ if lucky_persen > 0:
     consume_user_lucky_diskon_api(chat_id)
     print(f"[API] ✅ Lucky draw diskon {chat_id} consumed")
 
-        return jsonify({
-            "status": "OK", "message": "Order berhasil dibuat",
-            "resi": resi, "harga_final": harga_final,
-            "harga_final_str": f"Rp {harga_final:,}", "paket": nama,
-            "voucher_diskon": voucher_rupiah,
-            "waktu": f"{hari}, {tanggal} {jam}"
-        })
+return jsonify({
+    "status": "OK", "message": "Order berhasil dibuat",
+    "resi": resi, "harga_final": harga_final,
+    "harga_final_str": f"Rp {harga_final:,}", "paket": nama,
+    "voucher_diskon": voucher_rupiah,
+    "waktu": f"{hari}, {tanggal} {jam}"
+})
     except Exception as e:
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
