@@ -143,6 +143,7 @@ FAQ_RESPONSES = {
 }
 
 processing_lock = set()
+pending_poin_edit = {}  # {admin_chat_id: {'target': user_id, 'ts': timestamp}}
 pending_flow = {}
 last_command_time = {}
 last_callback_time = {}
@@ -1469,6 +1470,41 @@ def _write_point_log(chat_id, delta, alasan):
             f.write(f"{chat_id}|{now}|{delta}|{alasan}\n")
     except Exception as e:
         log_error("_write_point_log", e)
+
+def set_user_points(chat_id, poin_baru, alasan="Edit manual admin"):
+    """SET poin user jadi nilai tertentu (bukan ADD)."""
+    with points_lock:
+        try:
+            chat_id_str = str(chat_id)
+            rows = []
+            updated = False
+            try:
+                with open(F_POINTS, "r") as f:
+                    for line in f:
+                        parts = line.strip().split('|')
+                        if len(parts) == 2:
+                            c_id, pts = parts
+                            if c_id == chat_id_str:
+                                pts = str(int(poin_baru))
+                                updated = True
+                            rows.append(f"{c_id}|{pts}\n")
+            except FileNotFoundError:
+                pass
+            if not updated:
+                rows.append(f"{chat_id_str}|{int(poin_baru)}\n")
+            with open(F_POINTS, "w") as f:
+                f.writelines(rows)
+            try:
+                now = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
+                with open(F_POINTLOG, "a") as f:
+                    f.write(f"{chat_id}|{now}|SET={poin_baru}|{alasan}\n")
+            except Exception:
+                pass
+            return int(poin_baru)
+        except Exception as e:
+            log_error("set_user_points", e)
+            return None
+
 
 def add_user_points(chat_id, amount, alasan="Bonus/Penambahan"):
     with points_lock:
@@ -3584,6 +3620,41 @@ def callback_handler_master(call):
     if call.data and call.data.startswith(('cp_del_', 'cp_conf_', 'cp_cancel')):
         return handle_custom_paket_cb(call)
     # ===== END TAMBAHAN =====
+
+    # ===== EDIT POIN USER (admin only) =====
+    if call.data and call.data.startswith('poin_edit_'):
+        if call.message.chat.id != ADMIN_TELEGRAM_ID:
+            bot.answer_callback_query(call.id, text="Khusus admin!", show_alert=True)
+            return
+        target_id = call.data.replace('poin_edit_', '')
+        pending_poin_edit[call.message.chat.id] = {'target': target_id, 'ts': time.time()}
+        try:
+            info = bot.get_chat(int(target_id))
+            nama = (info.first_name or 'User')
+            if info.last_name:
+                nama += ' ' + info.last_name
+            uname = "@" + info.username if info.username else "-"
+        except Exception:
+            nama, uname = 'User', '-'
+        poin_now = get_user_points(target_id)
+        prompt = (
+            "POIN EDIT USER\n\n"
+            "Nama: " + nama + "\n"
+            "Username: " + uname + "\n"
+            "ID: " + target_id + "\n"
+            "Poin Sekarang: " + str(poin_now) + "\n\n"
+            "Kirim angka poin baru ke chat ini.\n\n"
+            "- Contoh: 500 -> set poin jadi 500\n"
+            "- Ketik 0 -> kosongkan poin user\n"
+            "- Ketik cancel -> batal"
+        )
+        try:
+            bot.send_message(call.message.chat.id, prompt, parse_mode="HTML")
+            bot.answer_callback_query(call.id, text="Prompt dibuka")
+        except Exception as e:
+            bot.answer_callback_query(call.id, text=str(e), show_alert=True)
+        return
+    # ===== END EDIT POIN =====
     
     save_user(call.message.chat.id)
     user = call.from_user
@@ -4524,6 +4595,54 @@ def handle_text_and_reviews(message):
     chat_id = message.chat.id
     if message.chat.type != 'private':
         return
+    
+    # ===== CEK PENDING EDIT POIN (ADMIN) =====
+    if chat_id == ADMIN_TELEGRAM_ID and chat_id in pending_poin_edit:
+        state = pending_poin_edit[chat_id]
+        # Expire setelah 5 menit
+        if time.time() - state.get('ts', 0) > 300:
+            del pending_poin_edit[chat_id]
+            bot.reply_to(message, "⏰ Sesi edit expired. Ketik /hapuspoinuser lagi ya.")
+            return
+        raw = (message.text or '').strip().lower()
+        if raw == 'cancel':
+            del pending_poin_edit[chat_id]
+            bot.reply_to(message, "❌ Edit poin dibatalkan.")
+            return
+        try:
+            poin_baru = int(raw)
+            if poin_baru < 0:
+                raise ValueError
+        except ValueError:
+            bot.reply_to(message, "⚠️ Kirim <b>angka</b> poin. Contoh: <code>500</code>\nAtau <code>cancel</code> buat batal.", parse_mode="HTML")
+            return
+        target = state['target']
+        res = set_user_points(target, poin_baru)
+        del pending_poin_edit[chat_id]
+        if res is None:
+            bot.reply_to(message, "❌ Gagal simpan poin.")
+            return
+        bot.reply_to(
+            message,
+            f"✅ <b>POIN BERHASIL DIUBAH!</b>\n\n"
+            f"🆔 ID: <code>{target}</code>\n"
+            f"🪙 Poin Baru: <b>{poin_baru}</b>",
+            parse_mode="HTML"
+        )
+        # Notif user
+        try:
+            bot.send_message(
+                int(target),
+                f"🪙 <b>POIN KAMU DIUBAH ADMIN!</b>\n\n"
+                f"Saldo poin kamu sekarang: <b>{poin_baru} Poin</b>\n\n"
+                f"💡 Cek di APK PakelStore atau bot ini.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
+    # ===== END PENDING EDIT POIN =====
+    
     save_user(chat_id)
     user = message.from_user
     l = get_lang(user)
@@ -5222,6 +5341,69 @@ def cmd_logrestock(message):
         bot.reply_to(message, text, parse_mode="HTML")
     except Exception as e:
         bot.reply_to(message, f"❌ Gagal: {e}")
+
+
+# =====================================================================================
+#  COMMAND: /hapuspoinuser — Edit poin user (set atau kosongkan)
+# =====================================================================================
+@bot.message_handler(commands=['hapuspoinuser', 'hapuspoin', 'editpoin'])
+def cmd_hapus_poin_user(message):
+    if message.chat.id != ADMIN_TELEGRAM_ID:
+        bot.reply_to(message, "⚠️ Command khusus admin utama!")
+        return
+
+    # Baca list user
+    users = []
+    try:
+        with open(F_USERS, "r") as f:
+            users = [ln.strip() for ln in f if ln.strip() and not ln.startswith('-')]
+    except FileNotFoundError:
+        pass
+
+    if not users:
+        bot.reply_to(message, "📭 Belum ada user yang pakai bot.")
+        return
+
+    # Baca points
+    points_map = {}
+    try:
+        with open(F_POINTS, "r") as f:
+            for ln in f:
+                p = ln.strip().split('|')
+                if len(p) == 2:
+                    try:
+                        points_map[p[0]] = int(p[1])
+                    except ValueError:
+                        points_map[p[0]] = 0
+    except FileNotFoundError:
+        pass
+
+    # Build inline keyboard (max 30 user terbaru)
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    shown = users[-30:]
+    for uid in reversed(shown):
+        try:
+            info = bot.get_chat(int(uid))
+            nama = info.first_name or 'User'
+            if info.last_name:
+                nama += ' ' + info.last_name
+            nama = nama[:18]
+        except Exception:
+            nama = 'Unknown'
+        poin = points_map.get(uid, 0)
+        label = f"👤 {nama}  |  🪙 {poin}  |  ID:{uid}"
+        if len(label) > 60:
+            label = label[:57] + "..."
+        markup.add(types.InlineKeyboardButton(label, callback_data=f"poin_edit_{uid}"))
+
+    bot.reply_to(
+        message,
+        f"🪙 <b>EDIT POIN USER</b>\n\n"
+        f"👥 Total user: <b>{len(users)}</b>\n"
+        f"📋 Menampilkan {len(shown)} user terbaru\n\n"
+        f"👇 <i>Klik user untuk edit poinnya</i>",
+        reply_markup=markup, parse_mode="HTML"
+    )
 
 
 # =====================================================================================
