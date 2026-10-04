@@ -1468,28 +1468,28 @@ def add_user_points(chat_id, amount, alasan="Bonus/Penambahan"):
         try:
             current = get_user_points(chat_id)
             new_total = current + amount
-        rows = []
-        updated = False
-        chat_id_str = str(chat_id)
-        try:
-            with open(F_POINTS, "r") as f:
-                for line in f:
-                    parts = line.strip().split('|')
-                    if len(parts) == 2:
-                        c_id, pts = parts
-                        if c_id == chat_id_str:
-                            pts = str(new_total)
-                            updated = True
-                        rows.append(f"{c_id}|{pts}\n")
-        except FileNotFoundError:
-            pass
-        if not updated:
-            rows.append(f"{chat_id_str}|{new_total}\n")
-        with open(F_POINTS, "w") as f:
-        f.writelines(rows)
-    _write_point_log(chat_id, f"+{amount}", alasan)
-except Exception as e:
-    log_error("add_user_points", e)
+            rows = []
+            updated = False
+            chat_id_str = str(chat_id)
+            try:
+                with open(F_POINTS, "r") as f:
+                    for line in f:
+                        parts = line.strip().split('|')
+                        if len(parts) == 2:
+                            c_id, pts = parts
+                            if c_id == chat_id_str:
+                                pts = str(new_total)
+                                updated = True
+                            rows.append(f"{c_id}|{pts}\n")
+            except FileNotFoundError:
+                pass
+            if not updated:
+                rows.append(f"{chat_id_str}|{new_total}\n")
+            with open(F_POINTS, "w") as f:
+                f.writelines(rows)
+            _write_point_log(chat_id, f"+{amount}", alasan)
+        except Exception as e:
+            log_error("add_user_points", e)
 
 def reduce_user_points(chat_id, amount, alasan="Penukaran/Pengurangan"):
     current = get_user_points(chat_id)
@@ -1558,58 +1558,56 @@ def update_order_status_by_resi(resi_target, status_baru):
             current_status_db = ""
             rows = []
             for parts in _read_all_orders():
-            chat_id, tanggal, hari, jam, paket, harga, resi = parts[0:7]
-            status = parts[7]
-            timestamp_epoch = parts[8] if len(parts) > 8 else "0"
-            pay_method = parts[9] if len(parts) > 9 else "TRANSFER"
-            p_cost = int(parts[10]) if len(parts) > 10 and parts[10].isdigit() else 0
-            adm_msg_id = parts[11] if len(parts) > 11 else "0"
+                chat_id, tanggal, hari, jam, paket, harga, resi = parts[0:7]
+                status = parts[7]
+                timestamp_epoch = parts[8] if len(parts) > 8 else "0"
+                pay_method = parts[9] if len(parts) > 9 else "TRANSFER"
+                p_cost = int(parts[10]) if len(parts) > 10 and parts[10].isdigit() else 0
+                adm_msg_id = parts[11] if len(parts) > 11 else "0"
 
-            if resi.strip() == resi_target.strip():
-                target_chat_id = chat_id
-                target_payment = pay_method
-                target_paket_nama = paket
-                current_status_db = status
-                if status != "PENDING":
-                    rows.append('|'.join(parts) + "\n")
-                    continue
-                status = status_baru
-                updated = True
-            rows.append(f"{chat_id}|{tanggal}|{hari}|{jam}|{paket}|{harga}|{resi}|{status}|"
-                        f"{timestamp_epoch}|{pay_method}|{p_cost}|{adm_msg_id}\n")
+                if resi.strip() == resi_target.strip():
+                    target_chat_id = chat_id
+                    target_payment = pay_method
+                    target_paket_nama = paket
+                    current_status_db = status
+                    if status != "PENDING":
+                        rows.append('|'.join(parts) + "\n")
+                        continue
+                    status = status_baru
+                    updated = True
+                rows.append(f"{chat_id}|{tanggal}|{hari}|{jam}|{paket}|{harga}|{resi}|{status}|"
+                            f"{timestamp_epoch}|{pay_method}|{p_cost}|{adm_msg_id}\n")
 
-        if updated:
-            with open(F_ORDERS, "w") as f:
-                f.writelines(rows)
-            if target_chat_id and current_status_db == "PENDING":
-                if status_baru == "BERHASIL":
-                    set_user_coupon_status(target_chat_id, "USED")
-                    if target_payment != "POIN":
-                        _, multiplier, _ = get_user_tier(target_chat_id)
-                        bonus = int(10 * multiplier)
-                        add_user_points(target_chat_id, bonus, f"Bonus pembelian sukses (Tier x{multiplier})")
-                    paket_code = get_paket_code_by_name(target_paket_nama)
-                    if paket_code:
-                        reduce_stock_specific(paket_code, 1)
+            if updated:
+                with open(F_ORDERS, "w") as f:
+                    f.writelines(rows)
+                if target_chat_id and current_status_db == "PENDING":
+                    if status_baru == "BERHASIL":
+                        set_user_coupon_status(target_chat_id, "USED")
+                        if target_payment != "POIN":
+                            _, multiplier, _ = get_user_tier(target_chat_id)
+                            bonus = int(10 * multiplier)
+                            add_user_points(target_chat_id, bonus, f"Bonus pembelian sukses (Tier x{multiplier})")
+                        paket_code = get_paket_code_by_name(target_paket_nama)
+                        if paket_code:
+                            reduce_stock_specific(paket_code, 1)
+                        try:
+                            _apply_referral_bonus_if_eligible_helper(target_chat_id)
+                        except Exception:
+                            pass
+                        check_tier_upgrade(target_chat_id)
+                    elif status_baru in ["DITOLAK", "EXPIRED", "CANCELLED"]:
+                        set_user_coupon_status(target_chat_id, "AVAILABLE")
                     try:
-                        _apply_referral_bonus_if_eligible_helper(target_chat_id)
+                        marker = f".reminded_{resi_target}"
+                        if os.path.exists(marker):
+                            os.remove(marker)
                     except Exception:
                         pass
-                    # FIX v12: Cek Tier Upgrade
-                    check_tier_upgrade(target_chat_id)
-
-                elif status_baru in ["DITOLAK", "EXPIRED", "CANCELLED"]:
-                    set_user_coupon_status(target_chat_id, "AVAILABLE")
-                try:
-        marker = f".reminded_{resi_target}"
-        if os.path.exists(marker):
-            os.remove(marker)
-    except Exception:
-        pass
-    return True
-except Exception as e:
-    log_error("update_order_status_by_resi", e)
-return False
+                return True
+        except Exception as e:
+            log_error("update_order_status_by_resi", e)
+        return False
 
 def get_user_orders(chat_id):
     orders = []
@@ -4959,13 +4957,13 @@ def cmd_buatpaket(message):
             bot.reply_to(message, f"❌ Format salah! Butuh 7 bagian dipisah <code>|</code>. Kamu kasih {len(parts)}.", parse_mode="HTML")
             return
         kode = parts[0].lower().replace(' ', '_').replace('|', '_')
-nama = parts[1].replace('|', '/')
-harga = int(parts[2])
-poin = int(parts[3])
-deskripsi = parts[4] if parts[4] != '-' else "🎯 Paket custom"
-deskripsi = deskripsi.replace('|', '/')
-kategori = parts[5].lower()
-stok = int(parts[6])
+        nama = parts[1].replace('|', '/')
+        harga = int(parts[2])
+        poin = int(parts[3])
+        deskripsi = parts[4] if parts[4] != '-' else "🎯 Paket custom"
+        deskripsi = deskripsi.replace('|', '/')
+        kategori = parts[5].lower()
+        stok = int(parts[6])
         if kategori not in ['sultan', 'pro', 'safe', 'murah']:
             bot.reply_to(message, "❌ Kategori harus: sultan / pro / safe / murah")
             return
@@ -4973,28 +4971,28 @@ stok = int(parts[6])
             bot.reply_to(message, "❌ Harga harus > 0")
             return
         with stocks_lock:
-    custom = read_custom_paket()
-    if kode in custom or kode in MASTER_PAKET:
-        bot.reply_to(message, f"❌ Paket <code>{kode}</code> udah ada!", parse_mode="HTML")
-        return
-    custom[kode] = {'nama': nama, 'harga': harga, 'poin': poin, 'deskripsi': deskripsi, 'kategori': kategori, 'stok': stok}
-    saved = save_custom_paket(custom)
-    if saved:
-        set_stock(kode, stok)
-if saved:
-    bot.reply_to(message,
-        f"✅ <b>PAKET BERHASIL DIBUAT!</b>\n\n"
-        f"📦 Kode: <code>{kode}</code>\n"
-        f"🏷️ Nama: <b>{nama}</b>\n"
-        f"💰 Harga: Rp {format(harga, ',').replace(',', '.')}\n"
-        f"🪙 Poin: {poin}\n"
-        f"📁 Kategori: {kategori}\n"
-        f"📊 Stok: {stok}\n\n"
-        f"💡 Paket langsung muncul di APK & bot!",
-        parse_mode="HTML")
-    print(f"[BOT] ✅ Custom paket dibuat: {kode}")
-else:
-    bot.reply_to(message, "❌ Gagal simpan paket!")
+            custom = read_custom_paket()
+            if kode in custom or kode in MASTER_PAKET:
+                bot.reply_to(message, f"❌ Paket <code>{kode}</code> udah ada!", parse_mode="HTML")
+                return
+            custom[kode] = {'nama': nama, 'harga': harga, 'poin': poin, 'deskripsi': deskripsi, 'kategori': kategori, 'stok': stok}
+            saved = save_custom_paket(custom)
+            if saved:
+                set_stock(kode, stok)
+        if saved:
+            bot.reply_to(message,
+                f"✅ <b>PAKET BERHASIL DIBUAT!</b>\n\n"
+                f"📦 Kode: <code>{kode}</code>\n"
+                f"🏷️ Nama: <b>{nama}</b>\n"
+                f"💰 Harga: Rp {format(harga, ',').replace(',', '.')}\n"
+                f"🪙 Poin: {poin}\n"
+                f"📁 Kategori: {kategori}\n"
+                f"📊 Stok: {stok}\n\n"
+                f"💡 Paket langsung muncul di APK & bot!",
+                parse_mode="HTML")
+            print(f"[BOT] ✅ Custom paket dibuat: {kode}")
+        else:
+            bot.reply_to(message, "❌ Gagal simpan paket!")
     except ValueError as e:
         bot.reply_to(message, f"❌ Format angka salah: {e}")
     except Exception as e:
