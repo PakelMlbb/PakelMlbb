@@ -745,7 +745,6 @@ def create_order():
         paket_kode = data.get('paket_kode')
         payment_method = data.get('payment_method', 'TRANSFER')
 
-        # Validasi chat id
         if not chat_id or not chat_id.isdigit():
             return jsonify({"status": "ERROR", "message": "Chat ID tidak valid"}), 400
         if len(chat_id) < 8 or len(chat_id) > 15:
@@ -755,49 +754,119 @@ def create_order():
         if chat_id in ['12345678', '123456789', '1234567890', '11111111', '00000000']:
             return jsonify({"status": "ERROR", "message": "Chat ID terdeteksi palsu"}), 400
 
-        # Lookup paket (default + custom)
-all_paket = get_all_paket_combined_api()
-if paket_kode not in all_paket:
-    return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 400
+        all_paket = get_all_paket_combined_api()
+        if paket_kode not in all_paket:
+            return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 400
 
-paket_data = all_paket[paket_kode]
-nama = paket_data['nama']
-harga = paket_data['harga']
-harga_str = paket_data['harga_str']
-poin = paket_data['poin']
-is_custom = paket_data['is_custom']
+        paket_data = all_paket[paket_kode]
+        nama = paket_data['nama']
+        harga = paket_data['harga']
+        poin = paket_data['poin']
 
-stok = get_stok(paket_kode)
-if stok <= 0:
-    return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
+        stok = get_stok(paket_kode)
+        if stok <= 0:
+            return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
 
-# LOCK — cegah dobel order
-with orders_lock:
-    # Cek order PENDING — anti dobel
-    try:
-        with open(F_ORDERS, "r") as f:
-            for line in f:
-                parts = line.strip().split('|')
-                if len(parts) >= 8 and parts[0] == chat_id and parts[7].strip() == "PENDING":
+        with orders_lock:
+            try:
+                with open(F_ORDERS, "r") as f:
+                    for line in f:
+                        parts = line.strip().split('|')
+                        if len(parts) >= 8 and parts[0] == chat_id and parts[7].strip() == "PENDING":
+                            return jsonify({
+                                "status": "ERROR",
+                                "message": "Kamu masih punya pesanan PENDING (Resi: " + parts[6] + "). Selesaikan atau batalkan dulu!"
+                            }), 400
+            except FileNotFoundError:
+                pass
+
+            if payment_method == "POIN":
+                poin_dibutuhkan = poin
+                saldo_poin = read_points(chat_id)
+                if saldo_poin < poin_dibutuhkan:
                     return jsonify({
                         "status": "ERROR",
-                        "message": "Kamu masih punya pesanan PENDING (Resi: " + parts[6] + "). Selesaikan atau batalkan dulu!"
+                        "message": "Poin tidak cukup! Butuh " + str(poin_dibutuhkan) + " poin, saldo kamu " + str(saldo_poin) + " poin."
                     }), 400
-    except FileNotFoundError:
-        pass
-        # ============= ORDER VIA POIN =============
-        if payment_method == "POIN":
-            poin_dibutuhkan = poin
-            saldo_poin = read_points(chat_id)
-            if saldo_poin < poin_dibutuhkan:
-                return jsonify({
-                    "status": "ERROR",
-                    "message": "Poin tidak cukup! Butuh " + str(poin_dibutuhkan) + " poin, saldo kamu " + str(saldo_poin) + " poin."
-                }), 400
-            # Potong poin
-            add_user_points(chat_id, -poin_dibutuhkan, "Tukar Paket " + nama)
 
-            # Generate resi & order BERHASIL
+                add_user_points(chat_id, -poin_dibutuhkan, "Tukar Paket " + nama)
+
+                resi = "PKL-MLBB-" + str(random.randint(10000, 99999))
+                now = datetime.now(WIB)
+                tanggal = now.strftime('%d-%m-%Y')
+                hari_map = {'Mon':'Senin','Tue':'Selasa','Wed':'Rabu','Thu':'Kamis','Fri':'Jumat','Sat':'Sabtu','Sun':'Minggu'}
+                hari = hari_map.get(now.strftime('%a'), now.strftime('%a'))
+                jam = now.strftime('%H:%M:%S WIB')
+                ts = int(now.timestamp())
+
+                order_line = (str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|" +
+                              str(poin_dibutuhkan) + " POIN|" + resi + "|BERHASIL|" + str(ts) +
+                              "|POIN|" + str(poin_dibutuhkan) + "|0\n")
+                with open(F_ORDERS, "a") as f:
+                    f.write(order_line)
+
+                try:
+                    import threading as _th
+                    _notif_text = (
+                        "ORDER PAKAI POIN!\n\n"
+                        "Chat ID: <code>" + str(chat_id) + "</code>\n"
+                        "Paket: <b>" + nama + "</b>\n"
+                        "Poin Terpakai: " + str(poin_dibutuhkan) + "\n"
+                        "Saldo Sisa: " + str(saldo_poin - poin_dibutuhkan) + " poin\n"
+                        "Resi: <code>" + resi + "</code>\n"
+                        "Waktu: " + hari + ", " + tanggal + " " + jam + "\n\n"
+                        "<i>Order BERHASIL otomatis. Kirim script ke user!</i>"
+                    )
+                    _th.Thread(
+                        target=send_message_to_telegram,
+                        args=(ADMIN_TELEGRAM_ID, _notif_text),
+                        daemon=True
+                    ).start()
+                except Exception as e:
+                    print(f"[API] notif admin poin error: {e}")
+
+                return jsonify({
+                    "status": "OK",
+                    "message": "Order pakai poin berhasil!",
+                    "resi": resi,
+                    "harga_final": poin_dibutuhkan,
+                    "harga_final_str": str(poin_dibutuhkan) + " Poin",
+                    "paket": nama,
+                    "saldo_poin_sisa": saldo_poin - poin_dibutuhkan,
+                    "waktu": hari + ", " + tanggal + " " + jam,
+                    "payment_method": "POIN"
+                })
+
+            harga_final = harga
+            diskon_detail = []
+
+            flashsale_diskon, _ = read_flashsale()
+            if flashsale_diskon > 0:
+                harga_final = int(harga_final * (100 - flashsale_diskon) / 100)
+                diskon_detail.append("FlashSale -" + str(flashsale_diskon) + "%")
+
+            tier_label, multiplier, diskon_tier = get_user_tier(chat_id)
+            if diskon_tier > 0:
+                harga_final = int(harga_final * (100 - diskon_tier) / 100)
+                diskon_detail.append("Tier -" + str(diskon_tier) + "%")
+
+            if get_coupon_status(chat_id) == "AVAILABLE":
+                harga_final -= 10000
+                diskon_detail.append("KuponNewUser -Rp10.000")
+
+            lucky_persen = get_user_lucky_diskon_persen(chat_id)
+            if lucky_persen > 0:
+                harga_final = int(harga_final * (100 - lucky_persen) / 100)
+                diskon_detail.append("LuckyDraw -" + str(lucky_persen) + "%")
+
+            voucher_rupiah = get_user_voucher_rupiah(chat_id)
+            if voucher_rupiah > 0:
+                harga_final -= voucher_rupiah
+                diskon_detail.append("Voucher -Rp" + str(voucher_rupiah))
+
+            harga_final = max(0, harga_final)
+            print("[API] Order " + str(chat_id) + " - diskon: " + (", ".join(diskon_detail) if diskon_detail else "NONE"))
+
             resi = "PKL-MLBB-" + str(random.randint(10000, 99999))
             now = datetime.now(WIB)
             tanggal = now.strftime('%d-%m-%Y')
@@ -806,119 +875,36 @@ with orders_lock:
             jam = now.strftime('%H:%M:%S WIB')
             ts = int(now.timestamp())
 
-            order_line = (str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|" +
-                          str(poin_dibutuhkan) + " POIN|" + resi + "|BERHASIL|" + str(ts) +
-                          "|POIN|" + str(poin_dibutuhkan) + "|0\n")
+            order_line = (str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|Rp " +
+                          str(harga_final) + "|" + resi + "|PENDING|" + str(ts) + "|" +
+                          payment_method + "|0|0\n")
             with open(F_ORDERS, "a") as f:
                 f.write(order_line)
 
-            # Notif admin
-            try:
-    import threading
-    _notif_text = (
-        "🪙 <b>ORDER PAKAI POIN!</b>\n\n"
-        "👤 Chat ID: <code>" + str(chat_id) + "</code>\n"
-        "📦 Paket: <b>" + nama + "</b>\n"
-        "🪙 Poin Terpakai: " + str(poin_dibutuhkan) + "\n"
-        "💰 Saldo Sisa: " + str(saldo_poin - poin_dibutuhkan) + " poin\n"
-        "🔑 Resi: <code>" + resi + "</code>\n"
-        "⏱️ " + hari + ", " + tanggal + " " + jam + "\n\n"
-        "<i>Order BERHASIL otomatis. Kirim script ke user!</i>"
-    )
-    threading.Thread(
-        target=send_message_to_telegram,
-        args=(ADMIN_TELEGRAM_ID, _notif_text),
-        daemon=True
-    ).start()
-except Exception as e:
-    print(f"[API] notif admin poin error: {e}")
+            if get_coupon_status(chat_id) == "AVAILABLE":
+                set_coupon_status_api(chat_id, "PENDING")
+                print("[API] Kupon new user " + str(chat_id) + " -> PENDING")
+            if voucher_rupiah > 0:
+                consume_user_voucher_api(chat_id)
+                print("[API] Voucher rupiah " + str(chat_id) + " consumed")
+            if lucky_persen > 0:
+                consume_user_lucky_diskon_api(chat_id)
+                print("[API] Lucky draw diskon " + str(chat_id) + " consumed")
 
             return jsonify({
-                "status": "OK",
-                "message": "Order pakai poin berhasil!",
-                "resi": resi,
-                "harga_final": poin_dibutuhkan,
-                "harga_final_str": str(poin_dibutuhkan) + " Poin",
-                "paket": nama,
-                "saldo_poin_sisa": saldo_poin - poin_dibutuhkan,
+                "status": "OK", "message": "Order berhasil dibuat",
+                "resi": resi, "harga_final": harga_final,
+                "harga_final_str": "Rp " + str(harga_final), "paket": nama,
+                "voucher_diskon": voucher_rupiah,
                 "waktu": hari + ", " + tanggal + " " + jam,
-                "payment_method": "POIN"
+                "payment_method": "TRANSFER"
             })
-
-        # ============= ORDER VIA TRANSFER =============
-        harga_final = harga
-        diskon_detail = []
-
-        # 1. Flash Sale
-        flashsale_diskon, _ = read_flashsale()
-        if flashsale_diskon > 0:
-            harga_final = int(harga_final * (100 - flashsale_diskon) / 100)
-            diskon_detail.append("FlashSale -" + str(flashsale_diskon) + "%")
-
-        # 2. Tier diskon
-        tier_label, multiplier, diskon_tier = get_user_tier(chat_id)
-        if diskon_tier > 0:
-            harga_final = int(harga_final * (100 - diskon_tier) / 100)
-            diskon_detail.append("Tier -" + str(diskon_tier) + "%")
-
-        # 3. Kupon new user
-        if get_coupon_status(chat_id) == "AVAILABLE":
-            harga_final -= 10000
-            diskon_detail.append("KuponNewUser -Rp10.000")
-
-        # 4. Lucky Draw Diskon
-        lucky_persen = get_user_lucky_diskon_persen(chat_id)
-        if lucky_persen > 0:
-            harga_final = int(harga_final * (100 - lucky_persen) / 100)
-            diskon_detail.append("LuckyDraw -" + str(lucky_persen) + "%")
-
-        # 5. Voucher user
-        voucher_rupiah = get_user_voucher_rupiah(chat_id)
-        if voucher_rupiah > 0:
-            harga_final -= voucher_rupiah
-            diskon_detail.append("Voucher -Rp" + str(voucher_rupiah))
-
-        harga_final = max(0, harga_final)
-        print("[API] Order " + str(chat_id) + " - diskon: " + (", ".join(diskon_detail) if diskon_detail else "NONE"))
-
-        resi = "PKL-MLBB-" + str(random.randint(10000, 99999))
-        now = datetime.now(WIB)
-        tanggal = now.strftime('%d-%m-%Y')
-        hari_map = {'Mon':'Senin','Tue':'Selasa','Wed':'Rabu','Thu':'Kamis','Fri':'Jumat','Sat':'Sabtu','Sun':'Minggu'}
-        hari = hari_map.get(now.strftime('%a'), now.strftime('%a'))
-        jam = now.strftime('%H:%M:%S WIB')
-        ts = int(now.timestamp())
-
-        order_line = (str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|Rp " +
-                      str(harga_final) + "|" + resi + "|PENDING|" + str(ts) + "|" +
-                      payment_method + "|0|0\n")
-        with open(F_ORDERS, "a") as f:
-            f.write(order_line)
-
-        # Consume diskon
-        if get_coupon_status(chat_id) == "AVAILABLE":
-            set_coupon_status_api(chat_id, "PENDING")
-            print("[API] Kupon new user " + str(chat_id) + " -> PENDING")
-        if voucher_rupiah > 0:
-            consume_user_voucher_api(chat_id)
-            print("[API] Voucher rupiah " + str(chat_id) + " consumed")
-        if lucky_persen > 0:
-            consume_user_lucky_diskon_api(chat_id)
-            print("[API] Lucky draw diskon " + str(chat_id) + " consumed")
-
-        return jsonify({
-            "status": "OK", "message": "Order berhasil dibuat",
-            "resi": resi, "harga_final": harga_final,
-            "harga_final_str": "Rp " + str(harga_final), "paket": nama,
-            "voucher_diskon": voucher_rupiah,
-            "waktu": hari + ", " + tanggal + " " + jam,
-            "payment_method": "TRANSFER"
-        })
     except Exception as e:
         print(f"[API] create_order error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"status": "ERROR", "message": str(e)}), 500
+
 
 @app.route('/api/upload-bukti', methods=['POST'])
 def upload_bukti():
@@ -1172,29 +1158,29 @@ def redeem_voucher():
         if user_has_voucher(chat_id, kode):
             return jsonify({"status": "ERROR", "message": "Kamu sudah redeem voucher ini"}), 400
         with vouchers_lock:
-    vouchers = read_vouchers()
-    if kode not in vouchers:
-        return jsonify({"status": "ERROR", "message": "Kode voucher tidak ditemukan"}), 404
-    v = vouchers[kode]
-    if v['terpakai'] >= v['max']:
-        return jsonify({"status": "ERROR", "message": "Kuota voucher habis"}), 400
-    if v['expired'] > 0 and time.time() > v['expired']:
-        return jsonify({"status": "ERROR", "message": "Voucher sudah expired"}), 400
-    save_user_voucher(chat_id, kode, v['diskon'])
-    v['terpakai'] += 1
-    # Atomic write
-    tmp = F_VOUCHERS + ".tmp"
-    rows = []
-    for k, vv in vouchers.items():
-        rows.append(f"{k}|{vv['diskon']}|{vv['max']}|{vv['terpakai']}|{vv['expired']}")
-    with open(tmp, "w") as f:
-        f.write("\n".join(rows) + "\n")
-    os.replace(tmp, F_VOUCHERS)
-    return jsonify({"status": "OK", "message": "Voucher berhasil di-redeem",
-                    "kode": kode, "diskon": v['diskon'],
-                    "sisa_kuota": v['max'] - v['terpakai']})
+            vouchers = read_vouchers()
+            if kode not in vouchers:
+                return jsonify({"status": "ERROR", "message": "Kode voucher tidak ditemukan"}), 404
+            v = vouchers[kode]
+            if v['terpakai'] >= v['max']:
+                return jsonify({"status": "ERROR", "message": "Kuota voucher habis"}), 400
+            if v['expired'] > 0 and time.time() > v['expired']:
+                return jsonify({"status": "ERROR", "message": "Voucher sudah expired"}), 400
+            save_user_voucher(chat_id, kode, v['diskon'])
+            v['terpakai'] += 1
+            tmp = F_VOUCHERS + ".tmp"
+            rows = []
+            for k, vv in vouchers.items():
+                rows.append(f"{k}|{vv['diskon']}|{vv['max']}|{vv['terpakai']}|{vv['expired']}")
+            with open(tmp, "w") as f:
+                f.write("\n".join(rows) + "\n")
+            os.replace(tmp, F_VOUCHERS)
+            return jsonify({"status": "OK", "message": "Voucher berhasil di-redeem",
+                            "kode": kode, "diskon": v['diskon'],
+                            "sisa_kuota": v['max'] - v['terpakai']})
     except Exception as e:
         return jsonify({"status": "ERROR", "message": str(e)}), 500
+
 
 @app.route('/api/vouchers', methods=['GET'])
 def get_vouchers():
