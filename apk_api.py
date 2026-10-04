@@ -9,7 +9,14 @@ import json
 import random
 import time
 import requests as req
+import threading
 from datetime import datetime, timezone, timedelta
+
+# LOCK GLOBAL untuk file operations
+orders_lock = threading.Lock()
+vouchers_lock = threading.Lock()
+points_lock = threading.Lock()
+stocks_lock = threading.Lock()
 
 # =====================================================================================
 #  KONFIGURASI
@@ -45,28 +52,28 @@ GROUP_PAY_TOPIC_ID = 5
 # =====================================================================================
 LUCKY_DRAW_COOLDOWN_JAM = 24
 LUCKY_DRAW_HADIAH = [
+    ("🪙 +2 Poin",      "poin",  2,  40),
     ("🪙 +5 Poin",      "poin",  5,  30),
-    ("🪙 +10 Poin",     "poin",  10, 25),
-    ("🪙 +15 Poin",     "poin",  15, 20),
-    ("🪙 +25 Poin",     "poin",  25, 12),
-    ("🪙 +50 Poin",     "poin",  50, 7),
-    ("🎁 Diskon 5%",    "diskon", 5,  3),
-    ("🎁 Diskon 10%",   "diskon", 10, 2),
-    ("💎 Paket Semi-Safe GRATIS", "paket_gratis", 0, 1),
+    ("🪙 +10 Poin",     "poin",  10, 15),
+    ("🪙 +15 Poin",     "poin",  15, 8),
+    ("🪙 +25 Poin",     "poin",  25, 4),
+    ("🎁 Diskon 5%",    "diskon", 5,  2),
+    ("🎁 Diskon 10%",   "diskon", 10, 0.8),
+    ("💎 Paket Semi-Safe GRATIS", "paket_gratis", 0, 0.2),
 ]
 
 # =====================================================================================
 #  DATA PAKET DEFAULT
 # =====================================================================================
 MASTER_PAKET = {
-    'buy_natural': ("Natural Balance (30 Hari)", 120000, "Rp 120.000", 45, "🎯 Damage disesuaikan, aman & senyap."),
-    'buy_light': ("Light VIP + Drone (30 Hari)", 95000, "Rp 95.000", 35, "🎯 Damage wajar + pandangan luas."),
-    'buy_semisafe': ("Semi-Safe 14 Hari", 75000, "Rp 75.000", 25, "🎯 Paket harian terjangkau."),
-    'buy_lifetimesafe': ("Lifetime Safe Permanent", 200000, "Rp 200.000", 75, "🎯 Solusi hemat jangka panjang."),
-    'buy_sultan': ("Sultan One Hit 100% (30 Hari)", 150000, "Rp 150.000", 55, "🎯 Damage tembus batas, instant kill."),
-    'buy_pro': ("VIP Pro One Hit 80% (30 Hari)", 100000, "Rp 100.000", 40, "🎯 Damage sakit, skin kebuka."),
-    'buy_semiprivate': ("Semi-Private 14 Hari", 75000, "Rp 75.000", 25, "🎯 Performa stabil, anti patah-patah."),
-    'buy_permanent': ("Permanent Legend (Lifetime)", 250000, "Rp 250.000", 90, "🎯 Sekali bayar, update seumur hidup."),
+    'buy_natural': ("Natural Balance (30 Hari)", 120000, "Rp 120.000", 60, "🎯 Damage disesuaikan, aman & senyap."),
+    'buy_light': ("Light VIP + Drone (30 Hari)", 95000, "Rp 95.000", 45, "🎯 Damage wajar + pandangan luas."),
+    'buy_semisafe': ("Semi-Safe 14 Hari", 75000, "Rp 75.000", 35, "🎯 Paket harian terjangkau."),
+    'buy_lifetimesafe': ("Lifetime Safe Permanent", 200000, "Rp 200.000", 95, "🎯 Solusi hemat jangka panjang."),
+    'buy_sultan': ("Sultan One Hit 100% (30 Hari)", 150000, "Rp 150.000", 75, "🎯 Damage tembus batas, instant kill."),
+    'buy_pro': ("VIP Pro One Hit 80% (30 Hari)", 100000, "Rp 100.000", 55, "🎯 Damage sakit, skin kebuka."),
+    'buy_semiprivate': ("Semi-Private 14 Hari", 75000, "Rp 75.000", 35, "🎯 Performa stabil, anti patah-patah."),
+    'buy_permanent': ("Permanent Legend (Lifetime)", 250000, "Rp 250.000", 120, "🎯 Sekali bayar, update seumur hidup."),
 }
 
 DEFAULT_STOK = {
@@ -117,7 +124,7 @@ def read_stocks():
 def get_stok(paket_kode):
     stocks = read_stocks()
     stok = stocks.get(paket_kode)
-    if stok is None or stok <= 0:
+    if stok is None:
         return DEFAULT_STOK.get(paket_kode, 10)
     return stok
 
@@ -702,7 +709,6 @@ def home():
 
 @app.route('/api/paket', methods=['GET'])
 def get_paket():
-    ensure_stocks_file()
     flashsale_diskon, flashsale_sisa = read_flashsale()
     paket_list = []
     all_paket = get_all_paket_combined_api()
@@ -750,34 +756,35 @@ def create_order():
             return jsonify({"status": "ERROR", "message": "Chat ID terdeteksi palsu"}), 400
 
         # Lookup paket (default + custom)
-        all_paket = get_all_paket_combined_api()
-        if paket_kode not in all_paket:
-            return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 400
+all_paket = get_all_paket_combined_api()
+if paket_kode not in all_paket:
+    return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 400
 
-        paket_data = all_paket[paket_kode]
-        nama = paket_data['nama']
-        harga = paket_data['harga']
-        harga_str = paket_data['harga_str']
-        poin = paket_data['poin']
-        is_custom = paket_data['is_custom']
+paket_data = all_paket[paket_kode]
+nama = paket_data['nama']
+harga = paket_data['harga']
+harga_str = paket_data['harga_str']
+poin = paket_data['poin']
+is_custom = paket_data['is_custom']
 
-        stok = get_stok(paket_kode)
-        if stok <= 0:
-            return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
+stok = get_stok(paket_kode)
+if stok <= 0:
+    return jsonify({"status": "ERROR", "message": "Stok habis"}), 400
 
-        # Cek order PENDING — anti dobel
-        try:
-            with open(F_ORDERS, "r") as f:
-                for line in f:
-                    parts = line.strip().split('|')
-                    if len(parts) >= 8 and parts[0] == chat_id and parts[7].strip() == "PENDING":
-                        return jsonify({
-                            "status": "ERROR",
-                            "message": "Kamu masih punya pesanan PENDING (Resi: " + parts[6] + "). Selesaikan atau batalkan dulu!"
-                        }), 400
-        except FileNotFoundError:
-            pass
-
+# LOCK — cegah dobel order
+with orders_lock:
+    # Cek order PENDING — anti dobel
+    try:
+        with open(F_ORDERS, "r") as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) >= 8 and parts[0] == chat_id and parts[7].strip() == "PENDING":
+                    return jsonify({
+                        "status": "ERROR",
+                        "message": "Kamu masih punya pesanan PENDING (Resi: " + parts[6] + "). Selesaikan atau batalkan dulu!"
+                    }), 400
+    except FileNotFoundError:
+        pass
         # ============= ORDER VIA POIN =============
         if payment_method == "POIN":
             poin_dibutuhkan = poin
@@ -807,19 +814,24 @@ def create_order():
 
             # Notif admin
             try:
-                send_message_to_telegram(
-                    ADMIN_TELEGRAM_ID,
-                    "🪙 <b>ORDER PAKAI POIN!</b>\n\n" +
-                    "👤 Chat ID: <code>" + str(chat_id) + "</code>\n" +
-                    "📦 Paket: <b>" + nama + "</b>\n" +
-                    "🪙 Poin Terpakai: " + str(poin_dibutuhkan) + "\n" +
-                    "💰 Saldo Sisa: " + str(saldo_poin - poin_dibutuhkan) + " poin\n" +
-                    "🔑 Resi: <code>" + resi + "</code>\n" +
-                    "⏱️ " + hari + ", " + tanggal + " " + jam + "\n\n" +
-                    "<i>Order BERHASIL otomatis. Kirim script ke user!</i>"
-                )
-            except Exception as e:
-                print(f"[API] notif admin poin error: {e}")
+    import threading
+    _notif_text = (
+        "🪙 <b>ORDER PAKAI POIN!</b>\n\n"
+        "👤 Chat ID: <code>" + str(chat_id) + "</code>\n"
+        "📦 Paket: <b>" + nama + "</b>\n"
+        "🪙 Poin Terpakai: " + str(poin_dibutuhkan) + "\n"
+        "💰 Saldo Sisa: " + str(saldo_poin - poin_dibutuhkan) + " poin\n"
+        "🔑 Resi: <code>" + resi + "</code>\n"
+        "⏱️ " + hari + ", " + tanggal + " " + jam + "\n\n"
+        "<i>Order BERHASIL otomatis. Kirim script ke user!</i>"
+    )
+    threading.Thread(
+        target=send_message_to_telegram,
+        args=(ADMIN_TELEGRAM_ID, _notif_text),
+        daemon=True
+    ).start()
+except Exception as e:
+    print(f"[API] notif admin poin error: {e}")
 
             return jsonify({
                 "status": "OK",
@@ -1159,24 +1171,28 @@ def redeem_voucher():
             return jsonify({"status": "ERROR", "message": "Data tidak lengkap"}), 400
         if user_has_voucher(chat_id, kode):
             return jsonify({"status": "ERROR", "message": "Kamu sudah redeem voucher ini"}), 400
-        vouchers = read_vouchers()
-        if kode not in vouchers:
-            return jsonify({"status": "ERROR", "message": "Kode voucher tidak ditemukan"}), 404
-        v = vouchers[kode]
-        if v['terpakai'] >= v['max']:
-            return jsonify({"status": "ERROR", "message": "Kuota voucher habis"}), 400
-        if v['expired'] > 0 and time.time() > v['expired']:
-            return jsonify({"status": "ERROR", "message": "Voucher sudah expired"}), 400
-        save_user_voucher(chat_id, kode, v['diskon'])
-        v['terpakai'] += 1
-        rows = []
-        for k, vv in vouchers.items():
-            rows.append(f"{k}|{vv['diskon']}|{vv['max']}|{vv['terpakai']}|{vv['expired']}")
-        with open(F_VOUCHERS, "w") as f:
-            f.write("\n".join(rows) + "\n")
-        return jsonify({"status": "OK", "message": "Voucher berhasil di-redeem",
-                        "kode": kode, "diskon": v['diskon'],
-                        "sisa_kuota": v['max'] - v['terpakai']})
+        with vouchers_lock:
+    vouchers = read_vouchers()
+    if kode not in vouchers:
+        return jsonify({"status": "ERROR", "message": "Kode voucher tidak ditemukan"}), 404
+    v = vouchers[kode]
+    if v['terpakai'] >= v['max']:
+        return jsonify({"status": "ERROR", "message": "Kuota voucher habis"}), 400
+    if v['expired'] > 0 and time.time() > v['expired']:
+        return jsonify({"status": "ERROR", "message": "Voucher sudah expired"}), 400
+    save_user_voucher(chat_id, kode, v['diskon'])
+    v['terpakai'] += 1
+    # Atomic write
+    tmp = F_VOUCHERS + ".tmp"
+    rows = []
+    for k, vv in vouchers.items():
+        rows.append(f"{k}|{vv['diskon']}|{vv['max']}|{vv['terpakai']}|{vv['expired']}")
+    with open(tmp, "w") as f:
+        f.write("\n".join(rows) + "\n")
+    os.replace(tmp, F_VOUCHERS)
+    return jsonify({"status": "OK", "message": "Voucher berhasil di-redeem",
+                    "kode": kode, "diskon": v['diskon'],
+                    "sisa_kuota": v['max'] - v['terpakai']})
     except Exception as e:
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
