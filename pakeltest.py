@@ -1713,23 +1713,24 @@ def _apply_referral_bonus_if_eligible_helper(new_buyer_chat_id):
                 with open(tmp, "w") as f:
                     f.writelines(rows)
                 os.replace(tmp, F_REFERRALS)
-        if referrer_to_bonus:
-            bonus_poin = roll_gacha_referral_bonus()
-            add_user_points(referrer_to_bonus, bonus_poin, f"Bonus referral gacha (+{bonus_poin} poin)")
-            try:
-                bot.send_message(
-                    referrer_to_bonus,
-                    f"🎉 <b>BONUS REFERRAL CAIR!</b>\n\n"
-                    f"Temanmu berhasil belanja pertama kali.\n"
-                    f"🎰 Hasil Gacha Bonus: <b>+{bonus_poin} Poin</b> masuk ke saldo loyalitasmu!",
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        log_error("_apply_referral_bonus_if_eligible_helper", e)
+            if referrer_to_bonus:
+                bonus_poin = roll_gacha_referral_bonus()
+                add_user_points(referrer_to_bonus, bonus_poin, f"Bonus referral gacha (+{bonus_poin} poin)")
+                try:
+                    bot.send_message(
+                        referrer_to_bonus,
+                        f"\U0001F389 <b>BONUS REFERRAL CAIR!</b>\n\n"
+                        f"Temanmu berhasil belanja pertama kali.\n"
+                        f"\U0001F3B0 Hasil Gacha Bonus: <b>+{bonus_poin} Poin</b> masuk ke saldo loyalitasmu!",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log_error("_apply_referral_bonus_if_eligible_helper", e)
+
 
 def get_referral_stats(chat_id):
     total, bonus_cair = 0, 0
