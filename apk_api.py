@@ -462,15 +462,22 @@ def register_referral(referrer_id, referred_id):
         return False
 
 def get_last_spin_time(chat_id):
+    last_time = 0
     try:
         with open(F_SPINLOG, "r") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 2 and parts[0] == str(chat_id):
-                    return int(parts[1])
+                    try:
+                        t = int(parts[1])
+                        if t > last_time:
+                            last_time = t
+                    except ValueError:
+                        pass
     except FileNotFoundError:
         pass
-    return 0
+    return last_time
+
 
 def can_spin_now(chat_id):
     last = get_last_spin_time(chat_id)
