@@ -40,6 +40,7 @@ F_PROOFS = os.path.join(DATA_DIR, "proofs")
 F_LASTTIER = os.path.join(DATA_DIR, "last_tier.txt")
 # ---- FILE BARU v7 ----
 F_CUSTOM_PAKET = os.path.join(DATA_DIR, "custom_paket.txt")
+F_PAKET_OVERRIDE = os.path.join(DATA_DIR, "paket_override.txt")
 F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
 F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
 
@@ -570,14 +571,39 @@ def read_blacklist_api():
         print(f"[API] read_blacklist_api error: {e}")
     return bl
 
+
+
+def read_paket_override_api():
+    ov = {}
+    try:
+        if not os.path.exists(F_PAKET_OVERRIDE):
+            return ov
+        with open(F_PAKET_OVERRIDE, "r") as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) == 3:
+                    try:
+                        ov[parts[0]] = {'harga': int(parts[1]), 'poin': int(parts[2])}
+                    except ValueError:
+                        pass
+    except Exception as e:
+        print("[API] read_paket_override_api error: " + str(e))
+    return ov
+
+
 def get_all_paket_combined_api():
-    """Gabung default + custom, minus blacklist."""
+    """Gabung default + custom, minus blacklist. Apply override harga/poin."""
     bl = read_blacklist_api()
+    ov = read_paket_override_api()
     hasil = {}
     for kode, data in MASTER_PAKET.items():
         if kode in bl:
             continue
         nama, harga, harga_str, poin, deskripsi = data
+        if kode in ov:
+            harga = ov[kode]['harga']
+            poin = ov[kode]['poin']
+            harga_str = "Rp " + format(harga, ",").replace(",", ".")
         hasil[kode] = {
             'nama': nama, 'harga': harga, 'harga_str': harga_str,
             'poin': poin, 'deskripsi': deskripsi,
@@ -588,10 +614,15 @@ def get_all_paket_combined_api():
     for kode, p in custom.items():
         if kode in bl:
             continue
-        harga_str = "Rp " + format(p['harga'], ",").replace(",", ".")
+        harga = p['harga']
+        poin = p['poin']
+        if kode in ov:
+            harga = ov[kode]['harga']
+            poin = ov[kode]['poin']
+        harga_str = "Rp " + format(harga, ",").replace(",", ".")
         hasil[kode] = {
-            'nama': p['nama'], 'harga': p['harga'], 'harga_str': harga_str,
-            'poin': p['poin'], 'deskripsi': p['deskripsi'],
+            'nama': p['nama'], 'harga': harga, 'harga_str': harga_str,
+            'poin': poin, 'deskripsi': p['deskripsi'],
             'kategori': p['kategori'],
             'is_custom': True,
         }

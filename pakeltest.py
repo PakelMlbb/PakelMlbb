@@ -1,4 +1,6 @@
 import telebot
+import fcntl
+import contextlib
 from telebot import types
 import random
 import time
@@ -143,7 +145,8 @@ FAQ_RESPONSES = {
 }
 
 processing_lock = set()
-pending_poin_edit = {}  # {admin_chat_id: {'target': user_id, 'ts': timestamp}}
+pending_poin_edit = {}
+pending_harga_edit = {}  # {admin_chat_id: {'target': user_id, 'ts': timestamp}}
 pending_flow = {}
 last_command_time = {}
 last_callback_time = {}
@@ -1008,6 +1011,108 @@ def init_stock_if_empty():
                 f.write(f"{code}|{stok_awal}|{int(time.time())}\n")
     except Exception as e:
         log_error("init_stock_if_empty", e)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  SECURITY LAYER v2 — File Lock Cross-Process (fcntl.flock)
+# ═══════════════════════════════════════════════════════════════
+@contextlib.contextmanager
+def _safe_lock(name):
+    lock_path = os.path.join(DATA_DIR, "." + name + ".lock")
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except Exception:
+        pass
+    fd = open(lock_path, "w")
+    try:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            fd.close()
+        except Exception:
+            pass
+
+
+def _atomic_add_custom_paket(kode, data):
+    """Read-modify-write custom_paket.txt ATOMIC."""
+    with _safe_lock("custom_paket"):
+        custom = {}
+        try:
+            if os.path.exists(F_CUSTOM_PAKET):
+                with open(F_CUSTOM_PAKET, "r") as f:
+                    for line in f:
+                        parts = line.strip().split("|")
+                        if len(parts) >= 7:
+                            try:
+                                custom[parts[0]] = {
+                                    "nama": parts[1], "harga": int(parts[2]),
+                                    "poin": int(parts[3]), "deskripsi": parts[4],
+                                    "kategori": parts[5], "stok": int(parts[6]),
+                                }
+                            except (ValueError, IndexError):
+                                pass
+        except Exception as e:
+            log_error("_atomic_add_custom_paket_read", e)
+        if kode in custom:
+            return False, "Paket <code>" + kode + "</code> udah ada!"
+        if kode in MASTER_PAKET:
+            return False, "Kode <code>" + kode + "</code> bentrok dengan paket default!"
+        try:
+            if os.path.exists(F_CUSTOM_PAKET):
+                shutil.copy2(F_CUSTOM_PAKET, F_CUSTOM_PAKET + ".bak")
+        except Exception:
+            pass
+        custom[kode] = data
+        try:
+            rows = []
+            for k, p in custom.items():
+                _nm = p["nama"].replace("\n", " ").replace("\r", " ").replace("|", "/")
+                _dk = p["deskripsi"].replace("\n", " ").replace("\r", " ").replace("|", "/")
+                rows.append(k + "|" + _nm + "|" + str(p["harga"]) + "|" + str(p["poin"]) + "|" + _dk + "|" + p["kategori"] + "|" + str(p["stok"]))
+            tmp = F_CUSTOM_PAKET + ".tmp"
+            with open(tmp, "w") as f:
+                f.write("\n".join(rows) + ("\n" if rows else ""))
+            os.replace(tmp, F_CUSTOM_PAKET)
+            return True, "ok"
+        except Exception as e:
+            log_error("_atomic_add_custom_paket_write", e)
+            return False, "Gagal simpan: " + str(e)
+
+
+def _atomic_set_stock(kode, stok_baru):
+    """Set 1 stock ATOMIC."""
+    with _safe_lock("stocks"):
+        stocks = {}
+        try:
+            if os.path.exists(F_STOCKS):
+                with open(F_STOCKS, "r") as f:
+                    for line in f:
+                        parts = line.strip().split("|")
+                        if len(parts) >= 2:
+                            try:
+                                stocks[parts[0]] = int(parts[1])
+                            except ValueError:
+                                pass
+        except Exception as e:
+            log_error("_atomic_set_stock_read", e)
+        stocks[kode] = max(0, int(stok_baru))
+        try:
+            tmp = F_STOCKS + ".tmp"
+            with open(tmp, "w") as f:
+                now_ts = int(time.time())
+                for code, stok in stocks.items():
+                    f.write(code + "|" + str(stok) + "|" + str(now_ts) + "\n")
+            os.replace(tmp, F_STOCKS)
+            return True
+        except Exception as e:
+            log_error("_atomic_set_stock_write", e)
+            return False
+
 
 def _read_all_stocks():
     stocks = {}
@@ -2335,22 +2440,43 @@ def _kirim_profil_akun(chat_id, message_id, user, l='id'):
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup,
                          disable_web_page_preview=True)
 
+def _get_all_paket_sorted():
+    """Ambil semua paket (default + custom minus blacklist) urut default-dulu."""
+    allp = get_all_paket_combined()
+    # Urutkan: default dulu (sesuai urutan MASTER_PAKET), custom kemudian
+    default_order = list(MASTER_PAKET.keys())
+    defaults = [k for k in default_order if k in allp]
+    customs = sorted([k for k in allp.keys() if k not in MASTER_PAKET])
+    ordered = defaults + customs
+    return [(k, allp[k]) for k in ordered]
+
+
+def _get_katalog_page(part):
+    """Ambil 4 paket untuk halaman `part`."""
+    all_paket = _get_all_paket_sorted()
+    PER_PAGE = 4
+    total = len(all_paket)
+    total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    if part < 1:
+        part = 1
+    if part > total_pages:
+        part = total_pages
+    start = (part - 1) * PER_PAGE
+    end = start + PER_PAGE
+    return all_paket[start:end], part, total_pages, total
+
+
 def build_katalog_markup(part, l='id'):
     t = TRANSLATIONS.get(l, TRANSLATIONS['id'])
     markup = types.InlineKeyboardMarkup(row_width=2)
 
-    if part == 1:
-        paket_urutan = ['buy_natural', 'buy_light', 'buy_semisafe', 'buy_lifetimesafe']
-        next_btn_text = t['next_1']
-        nav_cb = 'katalog_part2'
-    else:
-        paket_urutan = ['buy_sultan', 'buy_pro', 'buy_semiprivate', 'buy_permanent']
-        next_btn_text = t['prev_2']
-        nav_cb = 'katalog_part1'
+    paket_page, current_part, total_pages, total_paket = _get_katalog_page(part)
 
-    for code in paket_urutan:
-        nama, harga_angka, harga_str, poin, _ = MASTER_PAKET[code]
-        stok = get_stock(code)
+    # Tombol paket
+    for kode, p in paket_page:
+        nama = p['nama']
+        harga = p['harga']
+        stok = get_stock(kode)
         if stok <= 0:
             stok_emoji = "❌"
         elif stok < 20:
@@ -2359,53 +2485,75 @@ def build_katalog_markup(part, l='id'):
             stok_emoji = "⚠️"
         else:
             stok_emoji = "📦"
-        btn_label = f"🛒 {nama.split('(')[0].strip()}\n💰 {harga_str} | {stok_emoji} {stok}"
-        markup.add(types.InlineKeyboardButton(btn_label, callback_data=code))
+        is_custom = p.get('is_custom', False)
+        prefix = "🆕" if is_custom else "🛒"
+        harga_str = "Rp " + format(harga, ",").replace(",", ".")
+        btn_label = f"{prefix} {nama.split('(')[0].strip()}\n💰 {harga_str} | {stok_emoji} {stok}"
+        markup.add(types.InlineKeyboardButton(btn_label, callback_data=kode))
 
-    markup.add(types.InlineKeyboardButton(next_btn_text, callback_data=nav_cb))
+    # Navigasi halaman
+    nav_row = []
+    if current_part > 1:
+        nav_row.append(types.InlineKeyboardButton("◀️ Sebelumnya", callback_data=f"katalog_page_{current_part - 1}"))
+    if current_part < total_pages:
+        nav_row.append(types.InlineKeyboardButton("▶️ Selanjutnya", callback_data=f"katalog_page_{current_part + 1}"))
+    if nav_row:
+        markup.add(*nav_row)
+
     markup.add(types.InlineKeyboardButton(t['back'], callback_data='menu_utama'))
     return markup
 
+
 def build_katalog_text(part, user, l='id', coupon_status="AVAILABLE"):
     t = TRANSLATIONS.get(l, TRANSLATIONS['id'])
-    if part == 1:
-        paket_urutan = ['buy_natural', 'buy_light', 'buy_semisafe', 'buy_lifetimesafe']
-        title = t['cat_title_1'].format(name=user.first_name)
-    else:
-        paket_urutan = ['buy_sultan', 'buy_pro', 'buy_semiprivate', 'buy_permanent']
-        title = t['cat_title_2'].format(name=user.first_name)
+    paket_page, current_part, total_pages, total_paket = _get_katalog_page(part)
 
-    text = f"{title}\n\n{t['bonus_txt']}\n\n"
+    if current_part == 1:
+        title = f"🔥 <b>KATALOG VIP — BAGIAN 1/{total_pages}</b> (Kak {user.first_name}) 🔥\n<i>(Custom Damage High-Tier & Fair Play Anti-Detect)</i>"
+    elif current_part == 2:
+        title = f"👑 <b>KATALOG VIP — BAGIAN 2/{total_pages}</b> (Kak {user.first_name}) 👑\n<i>(Sultan One Hit Instan & Dominasi Mutlak)</i>"
+    else:
+        title = f"🆕 <b>KATALOG VIP — BAGIAN {current_part}/{total_pages}</b> (Kak {user.first_name}) 🆕\n<i>(Paket Spesial & Custom)</i>"
+
+    text = f"{title}\n\n"
+    if current_part == 1:
+        text += t['bonus_txt'] + "\n\n"
     text += "━━━━━━━━━━━━━━━━━━━\n\n"
 
-    for code in paket_urutan:
-        nama, harga_angka, harga_str, poin, deskripsi = MASTER_PAKET[code]
-        stok = get_stock(code)
+    for kode, p in paket_page:
+        nama = p['nama']
+        harga_angka = p['harga']
+        poin = p['poin']
+        deskripsi = p['deskripsi']
+        harga_str = "Rp " + format(harga_angka, ",").replace(",", ".")
+        stok = get_stock(kode)
         stok_label = format_stock_label(stok)
-        # FIX v12: Flash Sale prioritas
+        is_custom = p.get('is_custom', False)
+        custom_badge = " 🆕" if is_custom else ""
+
         fs_diskon, _fs_sisa = get_active_flashsale()
         if fs_diskon > 0:
-            harga_flashsale = int(harga_angka * (100 - fs_diskon) / 100)
+            harga_fs = int(harga_angka * (100 - fs_diskon) / 100)
             text += (
-                f"👑 <b>{nama}</b>\n"
+                f"👑 <b>{nama}</b>{custom_badge}\n"
                 f"   ⚡ <b>FLASH SALE {fs_diskon}%!</b>\n"
-                f"   💵 Harga: <s>{harga_str}</s> <b>Rp {harga_flashsale:,}</b>\n"
+                f"   💵 Harga: <s>{harga_str}</s> <b>Rp {format(harga_fs, ',').replace(',', '.')}</b>\n"
                 f"   🪙 Atau Tukar: <b>{poin} Poin</b>\n"
                 f"   {stok_label}\n"
                 f"   {deskripsi}\n\n"
             )
-        elif coupon_status == "AVAILABLE":
+        elif coupon_status == "AVAILABLE" and not is_custom:
             harga_promo = harga_angka - 10000
             text += (
-                f"👑 <b>{nama}</b>\n"
-                f"   💵 Harga: <s>{harga_str}</s> <b>Rp {harga_promo:,}</b> <i>(Hemat Rp 10.000)</i>\n"
+                f"👑 <b>{nama}</b>{custom_badge}\n"
+                f"   💵 Harga: <s>{harga_str}</s> <b>Rp {format(harga_promo, ',').replace(',', '.')}</b> <i>(Hemat Rp 10.000)</i>\n"
                 f"   🪙 Atau Tukar: <b>{poin} Poin</b>\n"
                 f"   {stok_label}\n"
                 f"   {deskripsi}\n\n"
             )
         else:
             text += (
-                f"👑 <b>{nama}</b>\n"
+                f"👑 <b>{nama}</b>{custom_badge}\n"
                 f"   💵 Harga: <b>{harga_str}</b>\n"
                 f"   🪙 Atau Tukar: <b>{poin} Poin</b>\n"
                 f"   {stok_label}\n"
@@ -2416,6 +2564,7 @@ def build_katalog_text(part, user, l='id', coupon_status="AVAILABLE"):
     if coupon_status == "AVAILABLE":
         text += "\n🎁 <b>INFO PROMO:</b> Anda punya hak potong harga spesial member baru otomatis!"
     return text
+
 
 # =====================================================================================
 #  BAGIAN 7: COMMAND HANDLERS
@@ -4063,8 +4212,8 @@ def callback_handler_master(call):
                                   reply_markup=get_back_markup(l))
             return
 
-        elif data in ('menu_katalog', 'katalog_part1'):
-            loading_toast(call.id, "⏳ Memuat katalog 1...")
+        elif data == 'menu_katalog':
+            loading_toast(call.id, "⏳ Memuat katalog...")
             try:
                 coupon_status = get_user_coupon_status(chat_id)
                 markup = build_katalog_markup(1, l)
@@ -4073,20 +4222,28 @@ def callback_handler_master(call):
                                       reply_markup=markup, parse_mode="HTML",
                                       disable_web_page_preview=True)
             except Exception as e:
-                log_error("katalog_part1", e)
+                log_error("menu_katalog", e)
             return
 
-        elif data == 'katalog_part2':
-            loading_toast(call.id, "⏳ Memuat katalog 2...")
+        elif data.startswith('katalog_page_') or data.startswith('katalog_part'):
+            # Support backward compat: katalog_part1, katalog_part2 (lama)
+            try:
+                if data.startswith('katalog_page_'):
+                    part_num = int(data.replace('katalog_page_', ''))
+                else:
+                    part_num = int(data.replace('katalog_part', ''))
+            except ValueError:
+                part_num = 1
+            loading_toast(call.id, f"⏳ Memuat katalog {part_num}...")
             try:
                 coupon_status = get_user_coupon_status(chat_id)
-                markup = build_katalog_markup(2, l)
-                katalog_text = build_katalog_text(2, user, l, coupon_status)
+                markup = build_katalog_markup(part_num, l)
+                katalog_text = build_katalog_text(part_num, user, l, coupon_status)
                 bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=katalog_text,
                                       reply_markup=markup, parse_mode="HTML",
                                       disable_web_page_preview=True)
             except Exception as e:
-                log_error("katalog_part2", e)
+                log_error(f"katalog_page_{part_num}", e)
             return
 
         elif data in MASTER_PAKET:
@@ -4596,6 +4753,38 @@ def handle_text_and_reviews(message):
     if message.chat.type != 'private':
         return
     
+    # ===== PENDING EDIT HARGA/POIN =====
+    if chat_id == ADMIN_TELEGRAM_ID and chat_id in pending_harga_edit:
+        state = pending_harga_edit[chat_id]
+        if time.time() - state.get('ts', 0) > 300:
+            del pending_harga_edit[chat_id]
+            bot.reply_to(message, "Sesi expired. Ketik /custompaket lagi.")
+            return
+        raw = (message.text or '').strip().lower()
+        if raw == 'cancel':
+            del pending_harga_edit[chat_id]
+            bot.reply_to(message, "Edit dibatalkan.")
+            return
+        try:
+            val = int(raw)
+            if val < 0:
+                raise ValueError
+        except ValueError:
+            bot.reply_to(message, "Kirim angka. Contoh: <code>50000</code> atau <code>cancel</code>.", parse_mode="HTML")
+            return
+        kode = state['kode']
+        field = state['field']
+        res = set_paket_override_field(kode, field, val)
+        del pending_harga_edit[chat_id]
+        if res:
+            fl = "HARGA" if field == 'harga' else "POIN"
+            vd = ("Rp " + format(val, ',').replace(',', '.')) if field == 'harga' else str(val)
+            bot.reply_to(message, "OK " + fl + " <code>" + kode + "</code> -> <b>" + vd + "</b>", parse_mode="HTML")
+        else:
+            bot.reply_to(message, "Gagal simpan.")
+        return
+    # ===== END PENDING EDIT HARGA/POIN =====
+
     # ===== CEK PENDING EDIT POIN (ADMIN) =====
     if chat_id == ADMIN_TELEGRAM_ID and chat_id in pending_poin_edit:
         state = pending_poin_edit[chat_id]
@@ -4896,12 +5085,68 @@ print("[INFO] Pakel MlbbStore v10 VOUCHER-MGMT + AUTO-BC Edition Berhasil Dijala
 # =====================================================================================
 
 F_CUSTOM_PAKET = os.path.join(DATA_DIR, "custom_paket.txt")
+F_PAKET_OVERRIDE = os.path.join(DATA_DIR, "paket_override.txt")
 F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
 F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
 
 
 # ---- HELPER: BACA/SIMPAN CUSTOM PAKET ----
+
+def read_paket_override():
+    ov = {}
+    try:
+        if not os.path.exists(F_PAKET_OVERRIDE):
+            return ov
+        with open(F_PAKET_OVERRIDE, "r") as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) == 3:
+                    try:
+                        ov[parts[0]] = {'harga': int(parts[1]), 'poin': int(parts[2])}
+                    except ValueError:
+                        pass
+    except Exception as e:
+        log_error("read_paket_override", e)
+    return ov
+
+
+def write_paket_override(ov):
+    try:
+        tmp = F_PAKET_OVERRIDE + ".tmp"
+        with open(tmp, "w") as f:
+            for k, v in ov.items():
+                f.write(k + "|" + str(v['harga']) + "|" + str(v['poin']) + "\n")
+        os.replace(tmp, F_PAKET_OVERRIDE)
+        return True
+    except Exception as e:
+        log_error("write_paket_override", e)
+        return False
+
+
+def _get_base_paket_values(kode):
+    if kode in MASTER_PAKET:
+        n, h, hs, p, d = MASTER_PAKET[kode]
+        return h, p
+    custom = read_custom_paket()
+    if kode in custom:
+        return custom[kode]['harga'], custom[kode]['poin']
+    return None, None
+
+
+def set_paket_override_field(kode, field, value):
+    with _safe_lock("paket_override"):
+        ov = read_paket_override()
+        if kode not in ov:
+            base_h, base_p = _get_base_paket_values(kode)
+            if base_h is None:
+                return False
+            ov[kode] = {'harga': base_h, 'poin': base_p}
+        ov[kode][field] = int(value)
+        return write_paket_override(ov)
+
+
 def read_custom_paket():
+    """Baca custom paket — robust, skip line rusak."""
     paket = {}
     try:
         if not os.path.exists(F_CUSTOM_PAKET):
@@ -4909,8 +5154,13 @@ def read_custom_paket():
         with open(F_CUSTOM_PAKET, "r") as f:
             for line in f:
                 parts = line.strip().split('|')
-                if len(parts) >= 7:
-                    kode = parts[0]
+                # Harus EXACTLY 7 fields, DAN field numerik harus valid
+                if len(parts) != 7:
+                    continue
+                try:
+                    kode = parts[0].strip()
+                    if not kode:
+                        continue
                     paket[kode] = {
                         'nama': parts[1],
                         'harga': int(parts[2]),
@@ -4919,6 +5169,8 @@ def read_custom_paket():
                         'kategori': parts[5],
                         'stok': int(parts[6]),
                     }
+                except (ValueError, IndexError):
+                    continue
     except Exception as e:
         log_error("read_custom_paket", e)
     return paket
@@ -5088,7 +5340,8 @@ def cmd_buatpaket(message):
         harga = int(parts[2])
         poin = int(parts[3])
         deskripsi = parts[4] if parts[4] != '-' else "🎯 Paket custom"
-        deskripsi = deskripsi.replace('|', '/')
+        deskripsi = deskripsi.replace('|', '/').replace('\n', ' ').replace('\r', ' ').strip()
+        nama = nama.replace('\n', ' ').replace('\r', ' ').strip()
         kategori = parts[5].lower()
         stok = int(parts[6])
         if kategori not in ['sultan', 'pro', 'safe', 'murah']:
@@ -5097,16 +5350,53 @@ def cmd_buatpaket(message):
         if harga <= 0:
             bot.reply_to(message, "❌ Harga harus > 0")
             return
-        with stocks_lock:
-            custom = read_custom_paket()
-            if kode in custom or kode in MASTER_PAKET:
-                bot.reply_to(message, f"❌ Paket <code>{kode}</code> udah ada!", parse_mode="HTML")
+        # ==== VALIDASI LENGKAP ====
+        import re as _re
+        if not _re.match(r'^[a-z0-9_]+$', kode):
+            bot.reply_to(message, "❌ Kode tidak valid! Hanya boleh: a-z, 0-9, _. Contoh: buy_mega")
+            return
+        if len(kode) < 3 or len(kode) > 30:
+            bot.reply_to(message, "❌ Kode harus 3-30 karakter.")
+            return
+        nama = nama.replace('\n', ' ').replace('\r', ' ').strip()
+        if len(nama) < 3 or len(nama) > 80:
+            bot.reply_to(message, "❌ Nama harus 3-80 karakter.")
+            return
+        if harga <= 0 or harga > 100000000:
+            bot.reply_to(message, "❌ Harga harus 1 - 100.000.000.")
+            return
+        if poin < 0 or poin > 100000:
+            bot.reply_to(message, "❌ Poin harus 0 - 100.000.")
+            return
+        if stok < 0 or stok > 100000:
+            bot.reply_to(message, "❌ Stok harus 0 - 100.000.")
+            return
+        deskripsi = deskripsi.replace('\n', ' ').replace('\r', ' ').strip()
+        if len(deskripsi) > 500:
+            deskripsi = deskripsi[:497] + "..."
+        if len(deskripsi) < 3:
+            deskripsi = "🎯 Paket custom"
+        # Cek duplikat
+        if kode in MASTER_PAKET:
+            bot.reply_to(message, "❌ Kode <code>" + kode + "</code> bentrok dengan paket default!", parse_mode="HTML")
+            return
+        try:
+            _existing = read_custom_paket()
+            if kode in _existing:
+                bot.reply_to(message, "❌ Kode <code>" + kode + "</code> udah ada!", parse_mode="HTML")
                 return
-            custom[kode] = {'nama': nama, 'harga': harga, 'poin': poin, 'deskripsi': deskripsi, 'kategori': kategori, 'stok': stok}
-            saved = save_custom_paket(custom)
-            if saved:
-                set_stock(kode, stok)
+        except Exception:
+            pass
+        # ==== END VALIDASI ====
+        data = {'nama': nama, 'harga': harga, 'poin': poin, 'deskripsi': deskripsi, 'kategori': kategori, 'stok': stok}
+        saved, err = _atomic_add_custom_paket(kode, data)
+        if not saved:
+            bot.reply_to(message, "❌ " + err, parse_mode="HTML")
+            return
+        _atomic_set_stock(kode, stok)
         if saved:
+            _total_paket = len(_get_all_paket_sorted())
+            _total_pages = max(1, (_total_paket + 3) // 4)
             bot.reply_to(message,
                 f"✅ <b>PAKET BERHASIL DIBUAT!</b>\n\n"
                 f"📦 Kode: <code>{kode}</code>\n"
@@ -5115,7 +5405,10 @@ def cmd_buatpaket(message):
                 f"🪙 Poin: {poin}\n"
                 f"📁 Kategori: {kategori}\n"
                 f"📊 Stok: {stok}\n\n"
-                f"💡 Paket langsung muncul di APK & bot!",
+                f"🌐 <b>AUTO-SYNC:</b>\n"
+                f"  ✅ Bot: /katalog → halaman <b>terakhir</b>\n"
+                f"  ✅ APK PakelStore (auto-refresh 60s)\n"
+                f"\n📊 Total: <b>{_total_paket} paket</b> ({_total_pages} halaman)",
                 parse_mode="HTML")
             print(f"[BOT] ✅ Custom paket dibuat: {kode}")
         else:
@@ -5406,9 +5699,174 @@ def cmd_hapus_poin_user(message):
     )
 
 
+
+# =====================================================================================
+#  COMMAND: /fixcustompaket — Bersihin custom_paket.txt dari baris rusak
+# =====================================================================================
+@bot.message_handler(commands=['fixcustompaket'])
+def cmd_fixcustompaket(message):
+    if not is_super_admin(message.chat.id):
+        return
+    try:
+        if not os.path.exists(F_CUSTOM_PAKET):
+            bot.reply_to(message, "File custom_paket.txt gak ada.")
+            return
+        with open(F_CUSTOM_PAKET, "r") as f:
+            raw_lines = f.readlines()
+        valid_rows = []
+        skip_count = 0
+        for line in raw_lines:
+            parts = line.strip().split('|')
+            if len(parts) != 7 or not parts[0].strip():
+                skip_count += 1
+                continue
+            try:
+                int(parts[2]); int(parts[3]); int(parts[6])
+                valid_rows.append(line.strip() + "\n")
+            except ValueError:
+                skip_count += 1
+                continue
+        # Backup
+        try:
+            shutil.copy2(F_CUSTOM_PAKET, F_CUSTOM_PAKET + ".corruptbak")
+        except Exception:
+            pass
+        with open(F_CUSTOM_PAKET, "w") as f:
+            f.writelines(valid_rows)
+        bot.reply_to(
+            message,
+            f"✅ <b>FILE CUSTOM_PAKET DIBERSIHKAN!</b>\n\n"
+            f"🗑️ Baris rusak dibuang: <b>{skip_count}</b>\n"
+            f"✅ Baris valid: <b>{len(valid_rows)}</b>\n\n"
+            f"💡 Coba /listpaket sekarang.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        log_error("cmd_fixcustompaket", e)
+        bot.reply_to(message, f"❌ Error: {e}")
+
+
 # =====================================================================================
 #  CALLBACK: Custom Paket Hapus (dipanggil dari callback_handler_master)
 # =====================================================================================
+
+@bot.message_handler(commands=['custompaket', 'editpaket'])
+def cmd_custompaket(message):
+    if not is_super_admin(message.chat.id):
+        bot.reply_to(message, "⚠️ Command khusus admin utama!")
+        return
+    all_paket = get_all_paket_combined()
+    if not all_paket:
+        bot.reply_to(message, "📭 Belum ada paket.")
+        return
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for kode, p in all_paket.items():
+        is_custom = p.get('is_custom', False)
+        emoji = "\U0001F195" if is_custom else "\U0001F4E6"
+        label = emoji + " " + p['nama'] + " — Rp " + format(p['harga'], ',').replace(',', '.') + " | " + str(p['poin']) + " Poin"
+        if len(label) > 60:
+            label = label[:57] + "..."
+        markup.add(types.InlineKeyboardButton(label, callback_data="cpk_show_" + kode))
+    bot.reply_to(message,
+        "✏️ <b>EDIT PAKET</b>\n\n"
+        "Total: <b>" + str(len(all_paket)) + "</b> paket\n"
+        "Pilih paket yang mau di-edit harga/poinnya:",
+        reply_markup=markup, parse_mode="HTML")
+
+
+
+def handle_custompaket_cb(call):
+    data = call.data
+    chat_id = call.message.chat.id
+    message_id = call.message.message_id
+    try:
+        if data.startswith('cpk_show_'):
+            kode = data.replace('cpk_show_', '')
+            allp = get_all_paket_combined()
+            if kode not in allp:
+                bot.answer_callback_query(call.id, "Paket gak ditemukan!", show_alert=True)
+                return
+            p = allp[kode]
+            tipe = "CUSTOM" if p.get('is_custom', False) else "DEFAULT"
+            text = (
+                "✏️ <b>EDIT PAKET</b>\n\n"
+                "📦 Kode: <code>" + kode + "</code>\n"
+                "🏷️ Nama: <b>" + p['nama'] + "</b>\n"
+                "💰 Harga: <b>Rp " + format(p['harga'], ',').replace(',', '.') + "</b>\n"
+                "🪙 Poin: <b>" + str(p['poin']) + "</b>\n"
+                "📊 Stok: " + str(get_stock(kode)) + "\n"
+                "📁 Tipe: " + tipe + "\n\n"
+                "Pilih yang mau di-edit:"
+            )
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("💰 Edit Harga", callback_data="cpk_edit_harga_" + kode),
+                types.InlineKeyboardButton("🪙 Edit Poin", callback_data="cpk_edit_poin_" + kode)
+            )
+            markup.add(types.InlineKeyboardButton("⬅️ Kembali", callback_data="cpk_back"))
+            try:
+                bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=markup, parse_mode="HTML")
+            except Exception:
+                bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML")
+            bot.answer_callback_query(call.id)
+            return
+
+        if data.startswith('cpk_edit_harga_') or data.startswith('cpk_edit_poin_'):
+            if data.startswith('cpk_edit_harga_'):
+                kode = data.replace('cpk_edit_harga_', '')
+                field = 'harga'
+                fl = 'HARGA'
+                contoh = '50000'
+            else:
+                kode = data.replace('cpk_edit_poin_', '')
+                field = 'poin'
+                fl = 'POIN'
+                contoh = '40'
+            pending_harga_edit[chat_id] = {'kode': kode, 'field': field, 'ts': time.time()}
+            allp = get_all_paket_combined()
+            cur = allp.get(kode, {})
+            cur_val = cur.get(field, 0)
+            prompt = (
+                "✏️ <b>EDIT " + fl + "</b>\n\n"
+                "📦 Kode: <code>" + kode + "</code>\n"
+                "🏷️ Nama: <b>" + cur.get('nama', kode) + "</b>\n"
+                "📌 Nilai sekarang: <b>" + str(cur_val) + "</b>\n\n"
+                "Kirim angka baru. Contoh: <code>" + contoh + "</code>\n"
+                "Atau <code>cancel</code> buat batal."
+            )
+            try:
+                bot.send_message(chat_id, prompt, parse_mode="HTML")
+                bot.answer_callback_query(call.id, text="Prompt dibuka")
+            except Exception as e:
+                bot.answer_callback_query(call.id, text=str(e)[:60], show_alert=True)
+            return
+
+        if data == 'cpk_back':
+            all_paket = get_all_paket_combined()
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            for kode, p in all_paket.items():
+                is_custom = p.get('is_custom', False)
+                emoji = "\U0001F195" if is_custom else "\U0001F4E6"
+                label = emoji + " " + p['nama'] + " — Rp " + format(p['harga'], ',').replace(',', '.') + " | " + str(p['poin']) + " Poin"
+                if len(label) > 60:
+                    label = label[:57] + "..."
+                markup.add(types.InlineKeyboardButton(label, callback_data="cpk_show_" + kode))
+            try:
+                bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                    text="✏️ <b>EDIT PAKET</b>\n\nPilih paket:",
+                    reply_markup=markup, parse_mode="HTML")
+            except Exception:
+                pass
+            bot.answer_callback_query(call.id)
+            return
+    except Exception as e:
+        log_error("handle_custompaket_cb", e)
+        try:
+            bot.answer_callback_query(call.id, text="Error: " + str(e)[:80], show_alert=True)
+        except Exception:
+            pass
+
+
 def handle_custom_paket_cb(call):
     data = call.data
     chat_id = call.message.chat.id
