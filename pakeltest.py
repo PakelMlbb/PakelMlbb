@@ -3768,6 +3768,11 @@ def callback_handler_master(call):
     # ===== TAMBAHAN CUSTOM PAKET v1.0 =====
     if call.data and call.data.startswith(('cp_del_', 'cp_conf_', 'cp_cancel')):
         return handle_custom_paket_cb(call)
+
+    # ===== EDIT PAKET (harga/poin) =====
+    if call.data and call.data.startswith('cpk_'):
+        return handle_custompaket_cb(call)
+    # ===== END EDIT PAKET =====
     # ===== END TAMBAHAN =====
 
     # ===== EDIT POIN USER (admin only) =====
