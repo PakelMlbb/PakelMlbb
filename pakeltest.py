@@ -3741,6 +3741,136 @@ def mask_username(username):
 
 
 
+
+
+# ═══════════════════════════════════════════════════════════
+#  SECURITY GUARD v2 — Spam + Error + Anomali
+# ═══════════════════════════════════════════════════════════
+_spam_tracker = {}  # {chat_id: [timestamps]}
+_SPAM_WINDOW = 60   # detik
+_SPAM_MAX_MSG = 15  # max pesan per window
+_BLOCK_DURATION = 900  # 15 menit
+
+
+def _spam_guard(chat_id):
+    """Return True kalau user spam (harus di-block sementara)."""
+    now = time.time()
+    cid = str(chat_id)
+    arr = _spam_tracker.get(cid, [])
+    arr = [t for t in arr if now - t < _SPAM_WINDOW]
+    arr.append(now)
+    _spam_tracker[cid] = arr
+    if len(arr) >= _SPAM_MAX_MSG:
+        try:
+            with _safe_lock("blocked"):
+                existing = {}
+                if os.path.exists(F_BLOCKED):
+                    with open(F_BLOCKED, "r") as f:
+                        for ln in f:
+                            p = ln.strip().split('|')
+                            if len(p) == 2:
+                                try:
+                                    existing[p[0]] = int(p[1])
+                                except ValueError:
+                                    pass
+                existing[cid] = int(now + _BLOCK_DURATION)
+                with open(F_BLOCKED, "w") as f:
+                    for k, v in existing.items():
+                        f.write(k + "|" + str(v) + "\n")
+        except Exception as e:
+            log_error("_spam_guard_block", e)
+        try:
+            with open(F_SPAM_LOG, "a") as f:
+                now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
+                f.write(now_str + " | " + cid + " | " + str(len(arr)) + " msgs in " + str(_SPAM_WINDOW) + "s\n")
+        except Exception:
+            pass
+        try:
+            bot.send_message(ADMIN_TELEGRAM_ID,
+                "🚨 <b>SPAM DETECTED!</b>\n\nUser: <code>" + cid + "</code>\nTotal: <b>" + str(len(arr)) + " pesan</b> dalam " + str(_SPAM_WINDOW) + " detik\n\nUser diblokir sementara 15 menit.",
+                parse_mode="HTML")
+        except Exception:
+            pass
+        return True
+    return False
+
+
+def _is_blocked_temp(chat_id):
+    """Cek apakah user masih dalam masa block sementara."""
+    try:
+        if not os.path.exists(F_BLOCKED):
+            return False
+        cid = str(chat_id)
+        now = time.time()
+        with open(F_BLOCKED, "r") as f:
+            for ln in f:
+                p = ln.strip().split('|')
+                if len(p) == 2 and p[0] == cid:
+                    try:
+                        if int(p[1]) > now:
+                            return True
+                    except ValueError:
+                        pass
+        return False
+    except Exception:
+        return False
+
+
+def _cleanup_blocked():
+    """Hapus block yang expired."""
+    try:
+        if not os.path.exists(F_BLOCKED):
+            return
+        now = time.time()
+        with _safe_lock("blocked"):
+            kept = []
+            with open(F_BLOCKED, "r") as f:
+                for ln in f:
+                    p = ln.strip().split('|')
+                    if len(p) == 2:
+                        try:
+                            if int(p[1]) > now:
+                                kept.append(ln.strip() + "\n")
+                        except ValueError:
+                            pass
+            with open(F_BLOCKED, "w") as f:
+                f.writelines(kept)
+    except Exception as e:
+        log_error("_cleanup_blocked", e)
+
+
+def _security_health_monitor():
+    """Thread background: cek file integrity tiap 5 menit."""
+    time.sleep(60)
+    while True:
+        try:
+            checks = []
+            files_check = [F_ORDERS, F_POINTS, F_USERS, F_STOCKS, F_CUSTOM_PAKET]
+            for fp in files_check:
+                if os.path.exists(fp):
+                    try:
+                        sz = os.path.getsize(fp)
+                        checks.append((os.path.basename(fp), sz, "OK"))
+                    except Exception:
+                        checks.append((os.path.basename(fp), 0, "ERR"))
+                else:
+                    checks.append((os.path.basename(fp), 0, "MISSING"))
+            miss = [c[0] for c in checks if c[2] != "OK"]
+            if miss:
+                try:
+                    bot.send_message(ADMIN_TELEGRAM_ID,
+                        "⚠️ <b>HEALTH WARNING</b>\n\nFile bermasalah:\n" + "\n".join("• " + m for m in miss),
+                        parse_mode="HTML")
+                except Exception:
+                    pass
+            _cleanup_blocked()
+        except Exception as e:
+            log_error("_security_health_monitor", e)
+        time.sleep(300)
+
+
+threading.Thread(target=_security_health_monitor, daemon=True).start()
+
 def _write_inbox(chat_id, tipe, title, body):
     """Tulis 1 pesan inbox ke user. Auto-cleanup kalau >5000 lines."""
     try:
@@ -3905,6 +4035,14 @@ def callback_handler_master(call):
     data = call.data
 
     if is_banned(chat_id):
+        return
+
+    if _is_blocked_temp(chat_id):
+        bot.answer_callback_query(call.id, "🚫 Kamu diblokir sementara. Coba 15 menit lagi.", show_alert=True)
+        return
+
+    if _spam_guard(chat_id):
+        bot.answer_callback_query(call.id, "🚨 Spam terdeteksi! Blokir 15 menit.", show_alert=True)
         return
 
     if is_spam_callback(chat_id):
@@ -4843,6 +4981,21 @@ def handle_text_and_reviews(message):
     chat_id = message.chat.id
     if message.chat.type != 'private':
         return
+    # ===== SPAM GUARD DI TEXT HANDLER =====
+    if _is_blocked_temp(chat_id):
+        try:
+            bot.reply_to(message, "🚫 Kamu diblokir sementara. Coba lagi 15 menit.", disable_web_page_preview=True)
+        except Exception:
+            pass
+        return
+    if _spam_guard(chat_id):
+        try:
+            bot.reply_to(message, "🚨 Spam terdeteksi! Kamu diblokir 15 menit.", disable_web_page_preview=True)
+        except Exception:
+            pass
+        return
+    # ===== END SPAM GUARD =====
+
     
     # ===== PENDING EDIT HARGA/POIN =====
     if chat_id == ADMIN_TELEGRAM_ID and chat_id in pending_harga_edit:
@@ -5181,6 +5334,9 @@ F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
 F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
 F_TESTIMONI = os.path.join(DATA_DIR, "testimoni.txt")
 F_INBOX = os.path.join(DATA_DIR, "inbox.txt")
+F_ERROR_LOG_API = os.path.join(DATA_DIR, "client_errors.txt")
+F_SPAM_LOG = os.path.join(DATA_DIR, "spam_log.txt")
+F_BLOCKED = os.path.join(DATA_DIR, "blocked_temp.txt")
 
 
 # ---- HELPER: BACA/SIMPAN CUSTOM PAKET ----
@@ -5803,6 +5959,72 @@ def cmd_hapus_poin_user(message):
 
 
 @bot.message_handler(commands=['clearinbox'])
+
+
+@bot.message_handler(commands=['securitystatus', 'secstat'])
+def cmd_securitystatus(message):
+    if not is_super_admin(message.chat.id):
+        return
+    try:
+        blocked_count = 0
+        now = time.time()
+        if os.path.exists(F_BLOCKED):
+            with open(F_BLOCKED, "r") as f:
+                for ln in f:
+                    p = ln.strip().split('|')
+                    if len(p) == 2:
+                        try:
+                            if int(p[1]) > now:
+                                blocked_count += 1
+                        except ValueError:
+                            pass
+        error_count = 0
+        if os.path.exists(F_ERROR_LOG_API):
+            with open(F_ERROR_LOG_API, "r") as f:
+                error_count = len([ln for ln in f if ln.strip()])
+        spam_count = 0
+        if os.path.exists(F_SPAM_LOG):
+            with open(F_SPAM_LOG, "r") as f:
+                spam_count = len([ln for ln in f if ln.strip()])
+        text = (
+            "🛡️ <b>SECURITY STATUS</b>\n\n"
+            "🚫 User di-block: <b>" + str(blocked_count) + "</b>\n"
+            "⚠️ Error client: <b>" + str(error_count) + "</b>\n"
+            "🚨 Spam logs: <b>" + str(spam_count) + "</b>\n\n"
+            "💡 Lapisan aktif:\n"
+            "• Global Error Catcher ✅\n"
+            "• Spam Guard ✅\n"
+            "• Health Monitor ✅\n"
+            "• Auto-Report Admin ✅\n"
+            "• Auto-Block 15 menit ✅"
+        )
+        bot.reply_to(message, text, parse_mode="HTML")
+    except Exception as e:
+        bot.reply_to(message, "Gagal: " + str(e))
+
+
+@bot.message_handler(commands=['unblock'])
+def cmd_unblock(message):
+    if not is_super_admin(message.chat.id):
+        return
+    args = message.text.replace('/unblock', '').strip().split()
+    if not args:
+        bot.reply_to(message, "Format: /unblock USER_ID")
+        return
+    uid = args[0].strip()
+    try:
+        if os.path.exists(F_BLOCKED):
+            with open(F_BLOCKED, "r") as f:
+                lines = [ln for ln in f if ln.strip()]
+            kept = [ln for ln in lines if not ln.startswith(uid + "|")]
+            with open(F_BLOCKED, "w") as f:
+                f.writelines(kept)
+        _spam_tracker.pop(uid, None)
+        bot.reply_to(message, "OK User " + uid + " di-unblock.")
+    except Exception as e:
+        bot.reply_to(message, "Gagal: " + str(e))
+
+
 def cmd_clearinbox(message):
     if not is_super_admin(message.chat.id):
         return

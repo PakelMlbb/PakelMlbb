@@ -45,6 +45,8 @@ F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
 F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
 F_TESTIMONI = os.path.join(DATA_DIR, "testimoni.txt")
 F_INBOX = os.path.join(DATA_DIR, "inbox.txt")
+F_ERROR_LOG_API = os.path.join(DATA_DIR, "client_errors.txt")
+F_SPAM_LOG = os.path.join(DATA_DIR, "spam_log.txt")
 
 ADMIN_TELEGRAM_ID = 8772023108
 GROUP_PAY_ID = "@Paysukses"
@@ -1278,6 +1280,46 @@ def api_user_vouchers():
 
 
 
+
+
+
+@app.route('/api/report-error', methods=['POST'])
+def api_report_error():
+    """Terima error report dari APK client."""
+    try:
+        data = request.json or {}
+        err_type = str(data.get('type', 'unknown'))[:50]
+        err_msg = str(data.get('message', ''))[:500]
+        err_file = str(data.get('file', ''))[:200]
+        err_line = str(data.get('line', ''))[:20]
+        chat_id = str(data.get('chat_id', 'anon'))[:20]
+        ua = str(request.headers.get('User-Agent', ''))[:200]
+        now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
+        try:
+            with open(F_ERROR_LOG_API, "a") as f:
+                f.write(now_str + " | " + chat_id + " | " + err_type + " | " + err_msg + " | " + err_file + ":" + err_line + " | " + ua + "\n")
+        except Exception:
+            pass
+        return jsonify({"status": "OK"})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/recent-errors', methods=['GET'])
+def api_recent_errors():
+    """Ambil error log terbaru (buat admin)."""
+    try:
+        limit = int(request.args.get('limit', 20))
+        if limit < 1: limit = 1
+        if limit > 100: limit = 100
+        if not os.path.exists(F_ERROR_LOG_API):
+            return jsonify({"status": "OK", "errors": [], "count": 0})
+        with open(F_ERROR_LOG_API, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        recent = lines[-limit:]
+        return jsonify({"status": "OK", "errors": recent, "count": len(recent), "total": len(lines)})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 @app.route('/api/inbox/clear', methods=['POST'])
 def api_inbox_clear():
