@@ -1382,32 +1382,97 @@ def api_inbox():
 
 @app.route('/api/testimoni', methods=['GET'])
 def api_testimoni():
-    """Baca testimoni real dari file."""
+    """Testimoni REAL + FAKE, generate di backend biar sama kayak bot."""
     try:
-        limit = int(request.args.get('limit', 20))
+        limit = int(request.args.get('limit', 12))
         if limit < 1: limit = 1
-        if limit > 50: limit = 50
-        if not os.path.exists(F_TESTIMONI):
-            return jsonify({"status": "OK", "testimoni": [], "count": 0})
-        with open(F_TESTIMONI, "r") as f:
-            lines = [ln.strip() for ln in f if ln.strip()]
-        recent = lines[-limit:]
-        result = []
-        for ln in reversed(recent):
-            parts = ln.split('|')
-            if len(parts) >= 6:
-                try:
-                    ts = int(parts[4])
-                except ValueError:
-                    ts = 0
-                result.append({
-                    "chat_id_masked": parts[1],
-                    "paket": parts[2],
-                    "harga": parts[3],
-                    "timestamp": ts,
-                    "metode": parts[5],
-                })
-        return jsonify({"status": "OK", "testimoni": result, "count": len(result)})
+        if limit > 30: limit = 30
+
+        # 1. Baca REAL dari file
+        real_list = []
+        if os.path.exists(F_TESTIMONI):
+            try:
+                with open(F_TESTIMONI, "r") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+                recent = lines[-limit:]
+                for ln in reversed(recent):
+                    parts = ln.split('|')
+                    if len(parts) >= 6:
+                        try:
+                            ts = int(parts[4])
+                        except ValueError:
+                            ts = 0
+                        real_list.append({
+                            "chat_id_masked": parts[1],
+                            "paket": parts[2],
+                            "harga": parts[3],
+                            "timestamp": ts,
+                            "metode": parts[5],
+                            "real": True
+                        })
+            except Exception:
+                pass
+
+        # 2. Generate FAKE (sama logic kayak bot)
+        FAKE_NAMES = [
+            "@R_Zky***", "@Alvinn_***", "@Dimas_99***", "@RezaPrat_***",
+            "@Bayu_Official***", "@Farel_X***", "@Yoga_Mlg***", "@DickyGez_***",
+            "@SuryaPratama***", "@RamaWicak***", "@Gilang_ID***", "@BagasKusn***",
+            "@Arif_Wd***", "@DaniPratama***", "@Hendra_99***", "@Rian_Xyz***",
+            "@Aldi_07***", "@Bintang_ID***", "@CandraPras***", "@DikaPrast_***",
+            "@Fajar_01***", "@GalihGmr***", "@IqbalID***", "@JokoPrasetyo***",
+            "@KevinWdj***", "@LukmanHkm***", "@MaulanaID***", "@NaufalXyz***",
+            "@Pratama99***", "@RafliSultan***", "@SatriaGaming***", "@TegarGanz***",
+            "@VianID***", "@WahyuPrat***", "@YudaDev***", "@ZakiMlf***",
+            "@Sultan_Mlbb***", "@Anjay_Mabar***", "@Gacor_Gaming***", "@TopGlobal_1***",
+            "@angga_99***", "@febri_nj***", "@putra_ml***", "@rendi_sultan***",
+            "@rizal_mlbb***", "@yoga_sultan***", "@zidan_ID***", "@dika_store***",
+        ]
+        FAKE_PAKET = [
+            ("Sultan One Hit 100% (30 Hari)", "Rp 150.000", "55 Poin"),
+            ("VIP Pro One Hit 80% (30 Hari)", "Rp 100.000", "40 Poin"),
+            ("Permanent Legend (Lifetime)", "Rp 250.000", "90 Poin"),
+            ("Natural Balance (30 Hari)", "Rp 120.000", "45 Poin"),
+            ("Lifetime Safe Permanent", "Rp 200.000", "75 Poin"),
+            ("Light VIP + Drone (30 Hari)", "Rp 95.000", "35 Poin"),
+            ("Semi-Safe 14 Hari", "Rp 75.000", "25 Poin"),
+            ("Semi-Private 14 Hari", "Rp 75.000", "25 Poin")
+        ]
+        import random as _rnd
+        import time as _tm
+        now_ts = int(_tm.time())
+        fake_list = []
+        fake_count = limit - len(real_list)
+        if fake_count < 4:
+            fake_count = 4
+        if fake_count > 12:
+            fake_count = 12
+        for _ in range(fake_count):
+            nama = _rnd.choice(FAKE_NAMES)
+            pkt = _rnd.choice(FAKE_PAKET)
+            menit_lalu = _rnd.randint(2, 58)
+            is_poin = _rnd.random() < 0.3
+            harga = pkt[2] if is_poin else pkt[1]
+            fake_list.append({
+                "chat_id_masked": nama,
+                "paket": pkt[0],
+                "harga": harga,
+                "timestamp": now_ts - (menit_lalu * 60),
+                "metode": "POIN" if is_poin else "TRANSFER",
+                "real": False
+            })
+
+        # 3. Merge + shuffle
+        merged = real_list + fake_list
+        _rnd.shuffle(merged)
+
+        return jsonify({
+            "status": "OK",
+            "testimoni": merged,
+            "count": len(merged),
+            "real_count": len(real_list),
+            "fake_count": len(fake_list)
+        })
     except Exception as e:
         print("[API] api_testimoni error: " + str(e))
         return jsonify({"status": "ERROR", "message": str(e)}), 500
