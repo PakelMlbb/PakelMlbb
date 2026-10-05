@@ -1703,6 +1703,7 @@ def update_order_status_by_resi(resi_target, status_baru):
             target_chat_id = None
             target_payment = "TRANSFER"
             target_paket_nama = ""
+            target_paket_harga = ""
             current_status_db = ""
             rows = []
             for parts in _read_all_orders():
@@ -1717,6 +1718,7 @@ def update_order_status_by_resi(resi_target, status_baru):
                     target_chat_id = chat_id
                     target_payment = pay_method
                     target_paket_nama = paket
+                    target_paket_harga = harga
                     current_status_db = status
                     if status != "PENDING":
                         rows.append('|'.join(parts) + "\n")
@@ -1732,6 +1734,14 @@ def update_order_status_by_resi(resi_target, status_baru):
                 if target_chat_id and current_status_db == "PENDING":
                     if status_baru == "BERHASIL":
                         set_user_coupon_status(target_chat_id, "USED")
+                        try:
+                            _write_testimoni_real(target_chat_id, target_paket_nama, target_paket_harga if 'target_paket_harga' in dir() else "", target_payment)
+                        except Exception:
+                            pass
+                        try:
+                            _write_inbox(target_chat_id, "order_acc", "🎉 Pesanan di-ACC!", "Paket " + str(target_paket_nama) + " - " + str(target_paket_harga))
+                        except Exception:
+                            pass
                         if target_payment != "POIN":
                             _, multiplier, _ = get_user_tier(target_chat_id)
                             bonus = int(10 * multiplier)
@@ -1746,6 +1756,12 @@ def update_order_status_by_resi(resi_target, status_baru):
                         check_tier_upgrade(target_chat_id)
                     elif status_baru in ["DITOLAK", "EXPIRED", "CANCELLED"]:
                         set_user_coupon_status(target_chat_id, "AVAILABLE")
+                        try:
+                            _tipe_map = {"DITOLAK": "order_reject", "EXPIRED": "order_expired", "CANCELLED": "order_cancel"}
+                            _msg_map = {"DITOLAK": "❌ Pesanan ditolak. Hubungi admin.", "EXPIRED": "⏰ Pesanan expired. Order ulang ya.", "CANCELLED": "🚫 Pesanan dibatalkan."}
+                            _write_inbox(target_chat_id, _tipe_map.get(status_baru, "order_reject"), "Status Pesanan: " + status_baru, _msg_map.get(status_baru, ""))
+                        except Exception:
+                            pass
                     try:
                         marker = f".reminded_{resi_target}"
                         if os.path.exists(marker):
@@ -3054,6 +3070,10 @@ def cmd_flashsale(message):
         args=(diskon, durasi_jam),
         daemon=True
     ).start()
+    try:
+        _write_inbox_all_users("flashsale", "⚡ FLASH SALE " + str(diskon) + "%", "Diskon " + str(diskon) + "% semua paket berlaku " + str(durasi_jam) + " jam!")
+    except Exception:
+        pass
 
 
 @bot.message_handler(commands=['buatvoucher'])
@@ -3466,6 +3486,10 @@ def broadcast_message(message):
             time.sleep(0.05)
         except Exception:
             pass
+    try:
+        _write_inbox_all_users("bc", "📢 Pengumuman Resmi", pesan_bc[:250])
+    except Exception:
+        pass
     bot.send_message(message.chat.id, f"✅ Broadcast selesai. Berhasil: {success}")
 
 @bot.message_handler(commands=['bcs'])
@@ -3712,6 +3736,68 @@ def mask_username(username):
         keep_len = max(3, len(name_part) // 2)
         masked = name_part[:keep_len] + "***"
     return f"@{masked}"
+
+
+
+
+
+def _write_inbox(chat_id, tipe, title, body):
+    """Tulis 1 pesan inbox ke user. Auto-cleanup kalau >5000 lines."""
+    try:
+        with _safe_lock("inbox"):
+            title_clean = str(title).replace("|", "/").replace("\n", " ").replace("\r", " ").strip()
+            body_clean = str(body).replace("|", "/").replace("\n", " ").replace("\r", " ").strip()
+            if len(title_clean) > 80: title_clean = title_clean[:77] + "..."
+            if len(body_clean) > 300: body_clean = body_clean[:297] + "..."
+            line = str(chat_id) + "|" + str(tipe) + "|" + title_clean + "|" + body_clean + "|" + str(int(time.time())) + "\n"
+            with open(F_INBOX, "a") as f:
+                f.write(line)
+            try:
+                if os.path.getsize(F_INBOX) > 500000:
+                    with open(F_INBOX, "r") as f:
+                        all_lines = f.readlines()
+                    if len(all_lines) > 5000:
+                        with open(F_INBOX, "w") as f:
+                            f.writelines(all_lines[-3000:])
+            except Exception:
+                pass
+    except Exception as e:
+        log_error("_write_inbox", e)
+
+
+def _write_inbox_all_users(tipe, title, body):
+    """Broadcast inbox ke semua user."""
+    try:
+        with open(F_USERS, "r") as f:
+            users = [ln.strip() for ln in f if ln.strip() and not ln.startswith('-')]
+        for uid in set(users):
+            _write_inbox(uid, tipe, title, body)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log_error("_write_inbox_all_users", e)
+
+
+def _write_testimoni_real(chat_id, paket, harga, metode):
+    """Tulis testimoni real saat ACC order."""
+    try:
+        with _safe_lock("testimoni"):
+            try:
+                info = bot.get_chat(int(chat_id))
+                if info.username:
+                    raw = "@" + info.username
+                else:
+                    raw = info.first_name or "User"
+            except Exception:
+                raw = "User***"
+            masked = mask_username(raw)
+            ts = int(time.time())
+            line = chat_id + "|" + masked + "|" + paket + "|" + harga + "|" + str(ts) + "|" + metode + "\n"
+            with open(F_TESTIMONI, "a") as f:
+                f.write(line)
+    except Exception as e:
+        log_error("_write_testimoni_real", e)
+
 
 def generate_real_testimonial(chat_id, resi_target):
     now = datetime.now(WIB)
@@ -5093,6 +5179,8 @@ F_CUSTOM_PAKET = os.path.join(DATA_DIR, "custom_paket.txt")
 F_PAKET_OVERRIDE = os.path.join(DATA_DIR, "paket_override.txt")
 F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
 F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
+F_TESTIMONI = os.path.join(DATA_DIR, "testimoni.txt")
+F_INBOX = os.path.join(DATA_DIR, "inbox.txt")
 
 
 # ---- HELPER: BACA/SIMPAN CUSTOM PAKET ----
@@ -5709,6 +5797,57 @@ def cmd_hapus_poin_user(message):
 #  COMMAND: /fixcustompaket — Bersihin custom_paket.txt dari baris rusak
 # =====================================================================================
 @bot.message_handler(commands=['fixcustompaket'])
+
+
+@bot.message_handler(commands=['cleartestimoni'])
+
+
+@bot.message_handler(commands=['clearinbox'])
+def cmd_clearinbox(message):
+    if not is_super_admin(message.chat.id):
+        return
+    try:
+        if os.path.exists(F_INBOX):
+            os.remove(F_INBOX)
+        bot.reply_to(message, "OK Inbox semua user dihapus.")
+    except Exception as e:
+        bot.reply_to(message, "Gagal: " + str(e))
+
+
+@bot.message_handler(commands=['inboxstats'])
+def cmd_inboxstats(message):
+    if not is_super_admin(message.chat.id):
+        return
+    try:
+        if not os.path.exists(F_INBOX):
+            bot.reply_to(message, "Belum ada inbox.")
+            return
+        with open(F_INBOX, "r") as f:
+            lines = [ln for ln in f if ln.strip()]
+        counts = {}
+        for ln in lines:
+            p = ln.split('|')
+            if len(p) >= 2:
+                counts[p[1]] = counts.get(p[1], 0) + 1
+        text = "📬 <b>STATISTIK INBOX</b>\\n\\nTotal pesan: <b>" + str(len(lines)) + "</b>\\n\\n"
+        for k, v in sorted(counts.items(), key=lambda x: -x[1]):
+            text += "• " + k + ": <b>" + str(v) + "</b>\\n"
+        bot.reply_to(message, text, parse_mode="HTML")
+    except Exception as e:
+        bot.reply_to(message, "Gagal: " + str(e))
+
+
+def cmd_cleartestimoni(message):
+    if not is_super_admin(message.chat.id):
+        return
+    try:
+        if os.path.exists(F_TESTIMONI):
+            os.remove(F_TESTIMONI)
+        bot.reply_to(message, "OK Testimoni real dihapus. Mulai dari kosong lagi.")
+    except Exception as e:
+        bot.reply_to(message, "Gagal: " + str(e))
+
+
 def cmd_fixcustompaket(message):
     if not is_super_admin(message.chat.id):
         return

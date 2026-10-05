@@ -43,6 +43,8 @@ F_CUSTOM_PAKET = os.path.join(DATA_DIR, "custom_paket.txt")
 F_PAKET_OVERRIDE = os.path.join(DATA_DIR, "paket_override.txt")
 F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
 F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
+F_TESTIMONI = os.path.join(DATA_DIR, "testimoni.txt")
+F_INBOX = os.path.join(DATA_DIR, "inbox.txt")
 
 ADMIN_TELEGRAM_ID = 8772023108
 GROUP_PAY_ID = "@Paysukses"
@@ -1270,6 +1272,103 @@ def api_user_vouchers():
         "status": "OK", "vouchers": vouchers,
         "total_diskon": total_diskon, "count": len(vouchers)
     })
+
+
+
+
+
+
+
+@app.route('/api/inbox/clear', methods=['POST'])
+def api_inbox_clear():
+    """Hapus inbox user tertentu."""
+    try:
+        data = request.json
+        chat_id = str(data.get('chat_id', '')).strip()
+        if not chat_id:
+            return jsonify({"status": "ERROR", "message": "chat_id wajib"}), 400
+        if not os.path.exists(F_INBOX):
+            return jsonify({"status": "OK", "message": "Inbox kosong"})
+        with open(F_INBOX, "r") as f:
+            lines = [ln for ln in f if ln.strip()]
+        kept = [ln for ln in lines if not ln.startswith(chat_id + "|")]
+        removed = len(lines) - len(kept)
+        with open(F_INBOX, "w") as f:
+            f.writelines(kept)
+        return jsonify({"status": "OK", "removed": removed})
+    except Exception as e:
+        print("[API] api_inbox_clear error: " + str(e))
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+@app.route('/api/inbox', methods=['GET'])
+def api_inbox():
+    """Ambil inbox user (max 50 terbaru)."""
+    try:
+        chat_id = request.args.get('chat_id', '').strip()
+        if not chat_id:
+            return jsonify({"status": "ERROR", "message": "chat_id wajib"}), 400
+        limit = int(request.args.get('limit', 50))
+        if limit < 1: limit = 1
+        if limit > 100: limit = 100
+        if not os.path.exists(F_INBOX):
+            return jsonify({"status": "OK", "inbox": [], "count": 0})
+        with open(F_INBOX, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        result = []
+        for ln in lines:
+            parts = ln.split('|')
+            if len(parts) < 5:
+                continue
+            if parts[0] != chat_id:
+                continue
+            try:
+                ts = int(parts[4])
+            except ValueError:
+                ts = 0
+            result.append({
+                "type": parts[1],
+                "title": parts[2],
+                "body": parts[3],
+                "timestamp": ts,
+            })
+        result.sort(key=lambda x: x['timestamp'], reverse=True)
+        result = result[:limit]
+        return jsonify({"status": "OK", "inbox": result, "count": len(result)})
+    except Exception as e:
+        print("[API] api_inbox error: " + str(e))
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+@app.route('/api/testimoni', methods=['GET'])
+def api_testimoni():
+    """Baca testimoni real dari file."""
+    try:
+        limit = int(request.args.get('limit', 20))
+        if limit < 1: limit = 1
+        if limit > 50: limit = 50
+        if not os.path.exists(F_TESTIMONI):
+            return jsonify({"status": "OK", "testimoni": [], "count": 0})
+        with open(F_TESTIMONI, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        recent = lines[-limit:]
+        result = []
+        for ln in reversed(recent):
+            parts = ln.split('|')
+            if len(parts) >= 6:
+                try:
+                    ts = int(parts[4])
+                except ValueError:
+                    ts = 0
+                result.append({
+                    "chat_id_masked": parts[1],
+                    "paket": parts[2],
+                    "harga": parts[3],
+                    "timestamp": ts,
+                    "metode": parts[5],
+                })
+        return jsonify({"status": "OK", "testimoni": result, "count": len(result)})
+    except Exception as e:
+        print("[API] api_testimoni error: " + str(e))
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 # =====================================================================================
 #  ENDPOINT BARU v7 — RESTOCK LOG (buat notif restock di APK)
