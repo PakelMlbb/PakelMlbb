@@ -5962,6 +5962,95 @@ def cmd_hapus_poin_user(message):
 
 
 @bot.message_handler(commands=['securitystatus', 'secstat'])
+
+
+@bot.message_handler(commands=['recenterrors', 'errors'])
+def cmd_recenterrors(message):
+    if not is_super_admin(message.chat.id):
+        return
+    try:
+        if not os.path.exists(F_ERROR_LOG_API):
+            bot.reply_to(message, "✅ Belum ada error tercatat. Bersih!")
+            return
+        with open(F_ERROR_LOG_API, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        if not lines:
+            bot.reply_to(message, "✅ Log error kosong.")
+            return
+        recent = lines[-10:]
+        text = "⚠️ <b>ERROR CLIENT (10 terakhir)</b>\n\n"
+        for i, ln in enumerate(reversed(recent), 1):
+            parts = ln.split(' | ')
+            if len(parts) >= 6:
+                waktu = parts[0]
+                chat_id = parts[1]
+                err_type = parts[2]
+                err_msg = parts[3]
+                err_file = parts[4]
+                if len(err_msg) > 60:
+                    err_msg = err_msg[:57] + "..."
+                if len(err_file) > 60:
+                    err_file = err_file[:57] + "..."
+                text += (str(i) + ". <code>" + waktu + "</code>\n"
+                         "   👤 <code>" + chat_id + "</code> | <b>" + err_type + "</b>\n"
+                         "   💬 " + err_msg + "\n"
+                         "   📍 " + err_file + "\n\n")
+        text += "📊 Total: <b>" + str(len(lines)) + "</b> error\n"
+        text += "💡 <code>/clearerrors</code> buat hapus log"
+        if len(text) > 4000:
+            text = text[:4000] + "..."
+        bot.reply_to(message, text, parse_mode="HTML")
+    except Exception as e:
+        bot.reply_to(message, "Gagal: " + str(e))
+
+
+@bot.message_handler(commands=['errorstats', 'errstats'])
+def cmd_errorstats(message):
+    if not is_super_admin(message.chat.id):
+        return
+    try:
+        if not os.path.exists(F_ERROR_LOG_API):
+            bot.reply_to(message, "✅ Belum ada error.")
+            return
+        with open(F_ERROR_LOG_API, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        if not lines:
+            bot.reply_to(message, "✅ Kosong.")
+            return
+        type_counts = {}
+        user_counts = {}
+        for ln in lines:
+            parts = ln.split(' | ')
+            if len(parts) >= 3:
+                t = parts[2]
+                u = parts[1] if len(parts) > 1 else "anon"
+                type_counts[t] = type_counts.get(t, 0) + 1
+                user_counts[u] = user_counts.get(u, 0) + 1
+        text = "📊 <b>STATISTIK ERROR</b>\n\n"
+        text += "📋 <b>Per Tipe:</b>\n"
+        for k, v in sorted(type_counts.items(), key=lambda x: -x[1])[:10]:
+            text += "   • " + k + ": <b>" + str(v) + "</b>\n"
+        text += "\n👥 <b>Top User Error:</b>\n"
+        for k, v in sorted(user_counts.items(), key=lambda x: -x[1])[:5]:
+            text += "   • <code>" + k + "</code>: <b>" + str(v) + "</b>\n"
+        text += "\n📊 Total: <b>" + str(len(lines)) + "</b> error"
+        bot.reply_to(message, text, parse_mode="HTML")
+    except Exception as e:
+        bot.reply_to(message, "Gagal: " + str(e))
+
+
+@bot.message_handler(commands=['clearerrors'])
+def cmd_clearerrors(message):
+    if not is_super_admin(message.chat.id):
+        return
+    try:
+        if os.path.exists(F_ERROR_LOG_API):
+            os.remove(F_ERROR_LOG_API)
+        bot.reply_to(message, "✅ Log error client dihapus.")
+    except Exception as e:
+        bot.reply_to(message, "Gagal: " + str(e))
+
+
 def cmd_securitystatus(message):
     if not is_super_admin(message.chat.id):
         return
