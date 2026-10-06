@@ -46,6 +46,7 @@ F_PAKET_OVERRIDE = os.path.join(DATA_DIR, "paket_override.txt")
 F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
 F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
 F_TESTIMONI = os.path.join(DATA_DIR, "testimoni.txt")
+F_TESTIMONI_GRUP = os.path.join(DATA_DIR, "testimoni_grup.txt")
 F_INBOX = os.path.join(DATA_DIR, "inbox.txt")
 F_ERROR_LOG_API = os.path.join(DATA_DIR, "client_errors.txt")
 F_ADMIN_TOKEN = os.path.join(DATA_DIR, "admin_token.txt")
@@ -1389,96 +1390,97 @@ def api_inbox():
 
 @app.route('/api/testimoni', methods=['GET'])
 def api_testimoni():
-    """Testimoni REAL + FAKE, generate di backend biar sama kayak bot."""
+    """Merge REAL (ACC) + GRUP (dari bot) + FAKE."""
     try:
         limit = int(request.args.get('limit', 12))
         if limit < 1: limit = 1
         if limit > 30: limit = 30
 
-        # 1. Baca REAL dari file
+        # 1. Real dari order ACC
         real_list = []
         if os.path.exists(F_TESTIMONI):
             try:
                 with open(F_TESTIMONI, "r") as f:
                     lines = [ln.strip() for ln in f if ln.strip()]
-                recent = lines[-limit:]
-                for ln in reversed(recent):
+                for ln in lines[-limit:]:
                     parts = ln.split('|')
                     if len(parts) >= 6:
-                        try:
-                            ts = int(parts[4])
-                        except ValueError:
-                            ts = 0
+                        try: ts = int(parts[4])
+                        except: ts = 0
                         real_list.append({
-                            "chat_id_masked": parts[1],
-                            "paket": parts[2],
-                            "harga": parts[3],
-                            "timestamp": ts,
-                            "metode": parts[5],
-                            "real": True
+                            "chat_id_masked": parts[1], "paket": parts[2],
+                            "harga": parts[3], "timestamp": ts, "metode": parts[5],
+                            "real": True, "source": "acc"
                         })
-            except Exception:
-                pass
+            except Exception: pass
 
-        # 2. Generate FAKE (sama logic kayak bot)
+        # 2. Dari grup 368 (bot auto-post)
+        grup_list = []
+        if os.path.exists(F_TESTIMONI_GRUP):
+            try:
+                with open(F_TESTIMONI_GRUP, "r") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+                for ln in lines[-limit:]:
+                    parts = ln.split('|')
+                    if len(parts) >= 4:
+                        try: ts = int(parts[0])
+                        except: ts = 0
+                        grup_list.append({
+                            "chat_id_masked": parts[1], "paket": parts[2],
+                            "harga": parts[3], "timestamp": ts,
+                            "metode": "TRANSFER", "real": True, "source": "grup"
+                        })
+            except Exception: pass
+
+        # 3. Fake generated
         FAKE_NAMES = [
-            "@R_Zky***", "@Alvinn_***", "@Dimas_99***", "@RezaPrat_***",
-            "@Bayu_Official***", "@Farel_X***", "@Yoga_Mlg***", "@DickyGez_***",
-            "@SuryaPratama***", "@RamaWicak***", "@Gilang_ID***", "@BagasKusn***",
-            "@Arif_Wd***", "@DaniPratama***", "@Hendra_99***", "@Rian_Xyz***",
-            "@Aldi_07***", "@Bintang_ID***", "@CandraPras***", "@DikaPrast_***",
-            "@Fajar_01***", "@GalihGmr***", "@IqbalID***", "@JokoPrasetyo***",
-            "@KevinWdj***", "@LukmanHkm***", "@MaulanaID***", "@NaufalXyz***",
-            "@Pratama99***", "@RafliSultan***", "@SatriaGaming***", "@TegarGanz***",
-            "@VianID***", "@WahyuPrat***", "@YudaDev***", "@ZakiMlf***",
-            "@Sultan_Mlbb***", "@Anjay_Mabar***", "@Gacor_Gaming***", "@TopGlobal_1***",
-            "@angga_99***", "@febri_nj***", "@putra_ml***", "@rendi_sultan***",
-            "@rizal_mlbb***", "@yoga_sultan***", "@zidan_ID***", "@dika_store***",
+            "@R_Zky***","@Jamal_ID***","@Doni_Official***","@Bagas_Kusuma***","@Farel_X***","@Yoga_Prat***",
+            "@Dicky_Gez***","@Surya_Darma***","@Alex_Walker***","@Dani_Prat***","@Hendra_99***","@Rian_Xyz***",
+            "@Aldi_Saputra***","@Bintang_ID***","@Candra_Pras***","@Kevin_Wijaya***","@Lukman_Hkm***","@MaulanaID***",
+            "@Naufal_Xyz***","@Pratama99***","@Rafli_Sultan***","@Satria_Game***","@Tegar_Ganz***","@Vian_ID***",
+            "@Wahyu_Prat***","@Yuda_Dev***","@Zaki_Mlf***","@Amirul_My***","@Haikal_Isk***","@Farhan_Zul***",
+            "@Aiman_Badri***","@Aqil_Danial***","@Syahmi_Zain***","@Luqman_Hakim***","@Zulhelmi_My***","@Liam_Smith***",
+            "@Noah_Miller***","@Oliver_Davis***","@Sultan_Mlbb***","@Anjay_Mabar***","@Gacor_Game***","@TopGlobal_1***",
+            "@Zul_Ganz***","@Rizky_Store***","@Ibnu_Hkm***","@Pandu_ID***","@Fikri_Xp***","@Aditya_Prat***"
         ]
-        FAKE_PAKET = [
-            ("Sultan One Hit 100% (30 Hari)", "Rp 150.000", "55 Poin"),
-            ("VIP Pro One Hit 80% (30 Hari)", "Rp 100.000", "40 Poin"),
-            ("Permanent Legend (Lifetime)", "Rp 250.000", "90 Poin"),
-            ("Natural Balance (30 Hari)", "Rp 120.000", "45 Poin"),
-            ("Lifetime Safe Permanent", "Rp 200.000", "75 Poin"),
-            ("Light VIP + Drone (30 Hari)", "Rp 95.000", "35 Poin"),
-            ("Semi-Safe 14 Hari", "Rp 75.000", "25 Poin"),
-            ("Semi-Private 14 Hari", "Rp 75.000", "25 Poin")
-        ]
+        # Auto-detect paket dari master + custom
+        try:
+            FAKE_PAKET = _get_all_paket_for_fake_api()
+        except Exception:
+            FAKE_PAKET = [("Sultan One Hit 100% (30 Hari)", "Rp 150.000", "55 Poin")]
         import random as _rnd
-        import time as _tm
-        now_ts = int(_tm.time())
+        now_ts = int(time.time())
         fake_list = []
-        fake_count = limit - len(real_list)
-        if fake_count < 4:
-            fake_count = 4
-        if fake_count > 12:
-            fake_count = 12
-        for _ in range(fake_count):
-            nama = _rnd.choice(FAKE_NAMES)
+        _rnd.shuffle(FAKE_NAMES)
+        fake_count = min(8, len(FAKE_NAMES))
+        for i in range(fake_count):
+            nm = FAKE_NAMES[i]
             pkt = _rnd.choice(FAKE_PAKET)
             menit_lalu = _rnd.randint(2, 58)
             is_poin = _rnd.random() < 0.3
             harga = pkt[2] if is_poin else pkt[1]
             fake_list.append({
-                "chat_id_masked": nama,
-                "paket": pkt[0],
-                "harga": harga,
+                "chat_id_masked": nm, "paket": pkt[0], "harga": harga,
                 "timestamp": now_ts - (menit_lalu * 60),
                 "metode": "POIN" if is_poin else "TRANSFER",
-                "real": False
+                "real": False, "source": "fake"
             })
 
-        # 3. Merge + shuffle
-        merged = real_list + fake_list
+        # 4. Merge + dedupe nama
+        merged = []
+        used = set()
+        for item in (real_list + grup_list + fake_list):
+            nm = item.get("chat_id_masked", "")
+            if nm and nm in used:
+                continue
+            if nm: used.add(nm)
+            merged.append(item)
         _rnd.shuffle(merged)
+        merged = merged[:limit]
 
         return jsonify({
-            "status": "OK",
-            "testimoni": merged,
-            "count": len(merged),
-            "real_count": len(real_list),
-            "fake_count": len(fake_list)
+            "status": "OK", "testimoni": merged, "count": len(merged),
+            "real_count": len(real_list), "grup_count": len(grup_list), "fake_count": len(fake_list)
         })
     except Exception as e:
         print("[API] api_testimoni error: " + str(e))
@@ -1940,6 +1942,688 @@ def api_admin_broadcast():
             "target": target
         })
     except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+
+
+# =====================================================================================
+#  ADMIN PANEL — FLASHSALE, VOUCHER, RESTOCK
+# =====================================================================================
+
+@app.route('/api/admin/flashsale', methods=['GET'])
+def api_admin_flashsale_get():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        # Baca flashsale
+        diskon, sisa = read_flashsale()
+        if diskon > 0:
+            return jsonify({"status": "OK", "aktif": True, "diskon": diskon, "sisa": sisa})
+        return jsonify({"status": "OK", "aktif": False, "diskon": 0, "sisa": 0})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/flashsale', methods=['POST'])
+def api_admin_flashsale_post():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        diskon = int(data.get('diskon', 0))
+        durasi = int(data.get('durasi', 1))
+        if diskon < 1 or diskon > 90:
+            return jsonify({"status": "ERROR", "message": "Diskon harus 1-90%"}), 400
+        if durasi < 1 or durasi > 24:
+            return jsonify({"status": "ERROR", "message": "Durasi 1-24 jam"}), 400
+        expired_ts = int(time.time()) + (durasi * 3600)
+        with open(F_FLASHSALE, "w") as f:
+            f.write(f"{diskon}|{expired_ts}")
+        return jsonify({"status": "OK", "diskon": diskon, "durasi": durasi, "sisa": durasi * 3600})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/flashsale/stop', methods=['POST'])
+def api_admin_flashsale_stop():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        try:
+            if os.path.exists(F_FLASHSALE):
+                os.remove(F_FLASHSALE)
+        except Exception:
+            pass
+        return jsonify({"status": "OK", "message": "Flashsale dihentikan"})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/voucher', methods=['GET'])
+def api_admin_voucher_get():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        # Baca voucher + hitung
+        vouchers = []
+        try:
+            with open(F_VOUCHERS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) >= 5:
+                        try:
+                            kode = parts[0]
+                            diskon = int(parts[1])
+                            max_p = int(parts[2])
+                            terpakai = int(parts[3])
+                            expired = int(parts[4]) if len(parts) > 4 else 0
+                            sisa = max_p - terpakai
+                            if expired > 0 and time.time() > expired:
+                                continue
+                            vouchers.append({
+                                "kode": kode, "diskon": diskon, "max": max_p,
+                                "terpakai": terpakai, "sisa": sisa, "expired": expired
+                            })
+                        except ValueError:
+                            pass
+        except FileNotFoundError:
+            pass
+        return jsonify({"status": "OK", "vouchers": vouchers, "count": len(vouchers)})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/voucher', methods=['POST'])
+def api_admin_voucher_post():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        kode = str(data.get('kode', '')).strip().upper()
+        diskon = int(data.get('diskon', 0))
+        max_pakai = int(data.get('max_pakai', 1))
+        durasi = int(data.get('durasi', 24))
+        if not kode or len(kode) < 3:
+            return jsonify({"status": "ERROR", "message": "Kode minimal 3 karakter"}), 400
+        if diskon < 1000 or diskon > 10000000:
+            return jsonify({"status": "ERROR", "message": "Diskon 1rb-10jt"}), 400
+        if max_pakai < 1 or max_pakai > 10000:
+            return jsonify({"status": "ERROR", "message": "Max pakai 1-10000"}), 400
+        if durasi < 1 or durasi > 168:
+            return jsonify({"status": "ERROR", "message": "Durasi 1-168 jam"}), 400
+        # Baca existing
+        vouchers = {}
+        try:
+            with open(F_VOUCHERS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) >= 4:
+                        try:
+                            vouchers[parts[0]] = parts
+                        except Exception:
+                            pass
+        except FileNotFoundError:
+            pass
+        if kode in vouchers:
+            return jsonify({"status": "ERROR", "message": "Kode voucher sudah ada"}), 400
+        expired_ts = int(time.time()) + (durasi * 3600)
+        with open(F_VOUCHERS, "a") as f:
+            f.write(f"{kode}|{diskon}|{max_pakai}|0|{expired_ts}\n")
+        # Broadcast ke semua user via Telegram
+        sent = 0
+        total = 0
+        try:
+            with open(F_USERS, "r") as f:
+                users = [ln.strip() for ln in f if ln.strip() and not ln.startswith('-')]
+            total = len(set(users))
+            bc_text = (
+                "🎫 <b>VOUCHER BARU!</b>\n\n"
+                "Kode: <code>" + kode + "</code>\n"
+                "Diskon: <b>Rp " + format(diskon, ",").replace(",", ".") + "</b>\n"
+                "Kuota: <b>" + str(max_pakai) + " user</b>\n"
+                "Berlaku: <b>" + str(durasi) + " jam</b>\n\n"
+                "Cara pakai: ketik <code>Voucher " + kode + "</code> di bot / redeem di APK"
+            )
+            for uid in set(users):
+                try:
+                    send_message_to_telegram(uid, bc_text)
+                    sent += 1
+                    time.sleep(0.05)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[API] bc voucher error: {e}")
+        return jsonify({"status": "OK", "kode": kode, "sent": sent, "total": total})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/voucher/delete', methods=['POST'])
+def api_admin_voucher_delete():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        kode = str(data.get('kode', '')).strip().upper()
+        if not kode:
+            return jsonify({"status": "ERROR", "message": "Kode kosong"}), 400
+        # Baca + filter
+        rows = []
+        found = False
+        try:
+            with open(F_VOUCHERS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) >= 1 and parts[0].upper() == kode:
+                        found = True
+                        continue
+                    rows.append(line.strip())
+        except FileNotFoundError:
+            pass
+        if not found:
+            return jsonify({"status": "ERROR", "message": "Voucher tidak ditemukan"}), 404
+        with open(F_VOUCHERS, "w") as f:
+            f.write("\n".join(rows) + ("\n" if rows else ""))
+        return jsonify({"status": "OK", "message": "Voucher dihapus"})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/restock', methods=['POST'])
+def api_admin_restock():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        kode = str(data.get('kode', '')).strip()
+        jumlah = data.get('jumlah', None)
+        # Baca stocks
+        stocks = {}
+        try:
+            with open(F_STOCKS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) >= 2:
+                        try:
+                            stocks[parts[0]] = int(parts[1])
+                        except ValueError:
+                            pass
+        except FileNotFoundError:
+            pass
+        all_paket = get_all_paket_combined_api()
+        if kode == 'ALL' or kode == '':
+            # Restock semua
+            changed = []
+            for pk in all_paket.keys():
+                old = stocks.get(pk, 0)
+                harga = all_paket[pk].get('harga', 0)
+                if harga < 100000:
+                    import random as _r
+                    new = _r.randint(150, 250)
+                elif harga < 180000:
+                    import random as _r
+                    new = _r.randint(80, 150)
+                else:
+                    import random as _r
+                    new = _r.randint(30, 80)
+                stocks[pk] = new
+                changed.append((pk, old, new))
+            # Tulis
+            with open(F_STOCKS, "w") as f:
+                now_ts = int(time.time())
+                for code, stok in stocks.items():
+                    f.write(f"{code}|{stok}|{now_ts}\n")
+            # Broadcast
+            for code, old, new in changed:
+                try:
+                    nama = all_paket.get(code, {}).get('nama', code)
+                    bc_text = (
+                        "🔥 <b>RESTOCK!</b> 🔥\n\n"
+                        "📦 " + nama + "\n"
+                        "📊 Stok: " + str(old) + " → <b>" + str(new) + "</b>\n\n"
+                        "⚡ Buruan order!"
+                    )
+                    try:
+                        with open(F_USERS, "r") as f:
+                            users = [ln.strip() for ln in f if ln.strip() and not ln.startswith('-')]
+                        for uid in set(users):
+                            try:
+                                send_message_to_telegram(uid, bc_text)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            return jsonify({"status": "OK", "count": len(changed)})
+        else:
+            if kode not in all_paket:
+                return jsonify({"status": "ERROR", "message": "Kode paket tidak ditemukan"}), 404
+            try:
+                jumlah = int(jumlah)
+            except (ValueError, TypeError):
+                return jsonify({"status": "ERROR", "message": "Jumlah harus angka"}), 400
+            if jumlah < 0 or jumlah > 100000:
+                return jsonify({"status": "ERROR", "message": "Jumlah 0-100000"}), 400
+            old = stocks.get(kode, 0)
+            stocks[kode] = jumlah
+            with open(F_STOCKS, "w") as f:
+                now_ts = int(time.time())
+                for code, stok in stocks.items():
+                    f.write(f"{code}|{stok}|{now_ts}\n")
+            return jsonify({"status": "OK", "kode": kode, "old": old, "new": jumlah})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+
+
+# =====================================================================================
+#  ADMIN PANEL — USER MANAGEMENT
+# =====================================================================================
+
+@app.route('/api/admin/users', methods=['GET'])
+def api_admin_users():
+    """List semua user + poin + total order."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        # Baca users
+        users = []
+        try:
+            with open(F_USERS, "r") as f:
+                users = [ln.strip() for ln in f if ln.strip() and not ln.startswith('-')]
+        except FileNotFoundError:
+            pass
+        # Baca points
+        points_map = {}
+        try:
+            with open(F_POINTS, "r") as f:
+                for ln in f:
+                    p = ln.strip().split('|')
+                    if len(p) == 2:
+                        try: points_map[p[0]] = int(p[1])
+                        except ValueError: points_map[p[0]] = 0
+        except FileNotFoundError:
+            pass
+        # Baca orders count
+        order_count = {}
+        try:
+            with open(F_ORDERS, "r") as f:
+                for ln in f:
+                    p = ln.strip().split('|')
+                    if len(p) >= 8 and p[7].strip() == "BERHASIL":
+                        cid = p[0]
+                        order_count[cid] = order_count.get(cid, 0) + 1
+        except FileNotFoundError:
+            pass
+        # Baca blocked temp
+        blocked = set()
+        try:
+            if os.path.exists(F_ADMIN_BLOCK):
+                pass
+        except Exception:
+            pass
+        # Build list (max 200 user terbaru)
+        result = []
+        for uid in reversed(users[-200:]):
+            result.append({
+                "chat_id": uid,
+                "poin": points_map.get(uid, 0),
+                "total_order": order_count.get(uid, 0)
+            })
+        return jsonify({"status": "OK", "users": result, "count": len(result), "total": len(users)})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/edit-poin', methods=['POST'])
+def api_admin_edit_poin():
+    """Set poin user ke nilai tertentu."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        uid = str(data.get('chat_id', '')).strip()
+        poin = data.get('poin', None)
+        if not uid:
+            return jsonify({"status": "ERROR", "message": "Chat ID wajib"}), 400
+        try:
+            poin_baru = int(poin)
+        except (ValueError, TypeError):
+            return jsonify({"status": "ERROR", "message": "Poin harus angka"}), 400
+        if poin_baru < 0 or poin_baru > 100000000:
+            return jsonify({"status": "ERROR", "message": "Poin 0-100jt"}), 400
+        # Baca existing
+        points_map = {}
+        try:
+            with open(F_POINTS, "r") as f:
+                for ln in f:
+                    p = ln.strip().split('|')
+                    if len(p) == 2:
+                        try: points_map[p[0]] = int(p[1])
+                        except ValueError: points_map[p[0]] = 0
+        except FileNotFoundError:
+            pass
+        old_poin = points_map.get(uid, 0)
+        points_map[uid] = poin_baru
+        # Tulis
+        with points_lock:
+            with open(F_POINTS, "w") as f:
+                for k, v in points_map.items():
+                    f.write(f"{k}|{v}\n")
+            # Log
+            try:
+                now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
+                with open(F_POINTLOG, "a") as f:
+                    f.write(f"{uid}|{now_str}|SET={poin_baru}|Admin APK (from {old_poin})\n")
+            except Exception:
+                pass
+        # Notif user
+        try:
+            notif = (
+                "🪙 <b>POIN KAMU DIUBAH ADMIN!</b>\n\n"
+                "Saldo sekarang: <b>" + str(poin_baru) + " Poin</b>\n\n"
+                "💡 Cek di APK PakelStore atau bot."
+            )
+            send_message_to_telegram(uid, notif)
+        except Exception:
+            pass
+        return jsonify({"status": "OK", "chat_id": uid, "old": old_poin, "new": poin_baru})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/block-user', methods=['POST'])
+def api_admin_block_user():
+    """Block / unblock user dari bot (via banned.txt)."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        uid = str(data.get('chat_id', '')).strip()
+        action = str(data.get('action', 'block')).strip().lower()
+        if not uid:
+            return jsonify({"status": "ERROR", "message": "Chat ID wajib"}), 400
+        # Baca banned existing
+        banned = set()
+        try:
+            if os.path.exists(F_BANNED):
+                with open(F_BANNED, "r") as f:
+                    banned = {ln.strip() for ln in f if ln.strip()}
+        except Exception:
+            pass
+        if action == 'block':
+            banned.add(uid)
+            msg = "User di-block"
+        elif action == 'unblock':
+            banned.discard(uid)
+            msg = "User di-unblock"
+        else:
+            return jsonify({"status": "ERROR", "message": "Action harus block/unblock"}), 400
+        # Tulis
+        with open(F_BANNED, "w") as f:
+            f.write("\n".join(sorted(banned)) + ("\n" if banned else ""))
+        return jsonify({"status": "OK", "action": action, "chat_id": uid, "message": msg})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+# =====================================================================================
+#  ADMIN PANEL — PAKET MANAGEMENT
+# =====================================================================================
+
+@app.route('/api/admin/paket', methods=['GET'])
+def api_admin_paket():
+    """List semua paket (default + custom + override info)."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        allp = get_all_paket_combined_api()
+        ov = read_paket_override_api()
+        paket_list = []
+        for kode, p in allp.items():
+            is_custom = p.get('is_custom', False)
+            has_override = kode in ov
+            paket_list.append({
+                "kode": kode,
+                "nama": p['nama'],
+                "harga": p['harga'],
+                "harga_str": p.get('harga_str', 'Rp 0'),
+                "poin": p['poin'],
+                "kategori": p.get('kategori', 'default'),
+                "is_custom": is_custom,
+                "has_override": has_override,
+                "stok": get_stok(kode)
+            })
+        return jsonify({"status": "OK", "paket": paket_list, "count": len(paket_list)})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/edit-paket', methods=['POST'])
+def api_admin_edit_paket():
+    """Edit harga/poin paket (pakai override)."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        kode = str(data.get('kode', '')).strip()
+        field = str(data.get('field', '')).strip()
+        value = data.get('value', None)
+        if not kode:
+            return jsonify({"status": "ERROR", "message": "Kode wajib"}), 400
+        if field not in ('harga', 'poin'):
+            return jsonify({"status": "ERROR", "message": "Field harus harga/poin"}), 400
+        try:
+            val_int = int(value)
+        except (ValueError, TypeError):
+            return jsonify({"status": "ERROR", "message": "Value harus angka"}), 400
+        if field == 'harga' and (val_int < 0 or val_int > 100000000):
+            return jsonify({"status": "ERROR", "message": "Harga 0-100jt"}), 400
+        if field == 'poin' and (val_int < 0 or val_int > 100000):
+            return jsonify({"status": "ERROR", "message": "Poin 0-100rb"}), 400
+        # Cek paket ada
+        allp = get_all_paket_combined_api()
+        if kode not in allp:
+            return jsonify({"status": "ERROR", "message": "Paket tidak ditemukan"}), 404
+        # Baca override existing
+        ov = read_paket_override_api()
+        # Init kalau belum ada
+        if kode not in ov:
+            ov[kode] = {'harga': allp[kode]['harga'], 'poin': allp[kode]['poin']}
+        old = ov[kode][field]
+        ov[kode][field] = val_int
+        # Tulis
+        with open(F_PAKET_OVERRIDE, "w") as f:
+            for k, v in ov.items():
+                f.write(f"{k}|{v['harga']}|{v['poin']}\n")
+        return jsonify({"status": "OK", "kode": kode, "field": field, "old": old, "new": val_int})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/delete-paket', methods=['POST'])
+def api_admin_delete_paket():
+    """Hapus paket custom / blacklist paket default."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        kode = str(data.get('kode', '')).strip()
+        if not kode:
+            return jsonify({"status": "ERROR", "message": "Kode wajib"}), 400
+        # Cek custom
+        custom_file = os.path.join(DATA_DIR, "custom_paket.txt")
+        is_custom = False
+        kept = []
+        try:
+            if os.path.exists(custom_file):
+                with open(custom_file, "r") as f:
+                    for ln in f:
+                        parts = ln.strip().split('|')
+                        if len(parts) >= 1 and parts[0] == kode:
+                            is_custom = True
+                            continue
+                        kept.append(ln.strip())
+        except Exception:
+            pass
+        if is_custom:
+            # Hapus dari custom
+            with open(custom_file, "w") as f:
+                f.write("\n".join(kept) + ("\n" if kept else ""))
+            return jsonify({"status": "OK", "kode": kode, "tipe": "custom_deleted"})
+        else:
+            # Blacklist paket default
+            bl_file = os.path.join(DATA_DIR, "blacklist_paket.txt")
+            bl = set()
+            try:
+                if os.path.exists(bl_file):
+                    with open(bl_file, "r") as f:
+                        bl = {ln.strip() for ln in f if ln.strip()}
+            except Exception:
+                pass
+            bl.add(kode)
+            with open(bl_file, "w") as f:
+                f.write("\n".join(sorted(bl)) + ("\n" if bl else ""))
+            return jsonify({"status": "OK", "kode": kode, "tipe": "default_blacklisted"})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+
+
+# =====================================================================================
+#  ADMIN PANEL — LAPORAN + STATS
+# =====================================================================================
+
+def _parse_harga_rp(h):
+    """Parse harga 'Rp 150.000' → 150000."""
+    try:
+        return int(''.join(ch for ch in str(h) if ch.isdigit()) or 0)
+    except Exception:
+        return 0
+
+
+@app.route('/api/admin/laporan', methods=['GET'])
+def api_admin_laporan():
+    """Laporan 7 hari + 30 hari + top buyer + breakdown paket & metode."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+
+        now = datetime.now(WIB)
+        today_date = now.date()
+
+        # Range hari
+        days_7 = []
+        days_30 = []
+        for i in range(7):
+            d = today_date - timedelta(days=i)
+            days_7.append(d.strftime('%d-%m-%Y'))
+        for i in range(30):
+            d = today_date - timedelta(days=i)
+            days_30.append(d.strftime('%d-%m-%Y'))
+
+        # Init counters
+        daily_7 = {d: {"order": 0, "sukses": 0, "revenue": 0} for d in days_7}
+        daily_30 = {d: {"order": 0, "sukses": 0, "revenue": 0} for d in days_30}
+        paket_counter = {}   # per paket
+        metode_counter = {}  # TRANSFER/QRIS/POIN
+        top_buyer = {}       # chat_id → {order_count, total_belanja}
+        total_7 = {"order": 0, "sukses": 0, "revenue": 0, "pending": 0, "ditolak": 0}
+        total_30 = {"order": 0, "sukses": 0, "revenue": 0}
+
+        try:
+            with open(F_ORDERS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) < 8:
+                        continue
+                    tgl = parts[1]
+                    paket = parts[4]
+                    harga_raw = parts[5]
+                    status = parts[7].strip()
+                    pay = parts[9] if len(parts) > 9 else "TRANSFER"
+                    cid = parts[0]
+                    nilai = _parse_harga_rp(harga_raw) if pay != "POIN" else 0
+
+                    # Hari ini-7
+                    if tgl in daily_7:
+                        daily_7[tgl]["order"] += 1
+                        total_7["order"] += 1
+                        if status == "BERHASIL":
+                            daily_7[tgl]["sukses"] += 1
+                            daily_7[tgl]["revenue"] += nilai
+                            total_7["sukses"] += 1
+                            total_7["revenue"] += nilai
+                        elif status == "PENDING":
+                            total_7["pending"] += 1
+                        elif status == "DITOLAK":
+                            total_7["ditolak"] += 1
+
+                    # Hari ini-30
+                    if tgl in daily_30:
+                        daily_30[tgl]["order"] += 1
+                        total_30["order"] += 1
+                        if status == "BERHASIL":
+                            daily_30[tgl]["sukses"] += 1
+                            daily_30[tgl]["revenue"] += nilai
+                            total_30["sukses"] += 1
+                            total_30["revenue"] += nilai
+
+                    # Breakdown paket & metode (semua waktu, cuma sukses)
+                    if status == "BERHASIL":
+                        paket_counter[paket] = paket_counter.get(paket, 0) + 1
+                        metode_counter[pay] = metode_counter.get(pay, 0) + 1
+                        if cid not in top_buyer:
+                            top_buyer[cid] = {"order": 0, "belanja": 0}
+                        top_buyer[cid]["order"] += 1
+                        top_buyer[cid]["belanja"] += nilai
+        except FileNotFoundError:
+            pass
+
+        # Top 10 buyer
+        top_list = sorted(top_buyer.items(), key=lambda x: x[1]["order"], reverse=True)[:10]
+        top_result = []
+        for cid, st in top_list:
+            masked = ("User***" + cid[-4:]) if len(cid) > 4 else "User***"
+            top_result.append({
+                "chat_id": cid, "masked": masked,
+                "order": st["order"], "belanja": st["belanja"]
+            })
+
+        # Paket terlaris
+        paket_sorted = sorted(paket_counter.items(), key=lambda x: x[1], reverse=True)[:10]
+        paket_result = [{"nama": k, "count": v} for k, v in paket_sorted]
+
+        # Metode
+        metode_result = [{"metode": k, "count": v} for k, v in sorted(metode_counter.items(), key=lambda x: x[1], reverse=True)]
+
+        # Daily 7 untuk grafik (urut dari 7 hari lalu → hari ini)
+        graph_7 = []
+        for d in reversed(days_7):
+            graph_7.append({
+                "tanggal": d,
+                "order": daily_7[d]["order"],
+                "sukses": daily_7[d]["sukses"],
+                "revenue": daily_7[d]["revenue"]
+            })
+
+        return jsonify({
+            "status": "OK",
+            "hari_ini_7": total_7,
+            "hari_ini_7_str": "Rp " + format(total_7["revenue"], ",").replace(",", "."),
+            "hari_ini_30": total_30,
+            "hari_ini_30_str": "Rp " + format(total_30["revenue"], ",").replace(",", "."),
+            "graph_7": graph_7,
+            "top_buyer": top_result,
+            "paket_terlaris": paket_result,
+            "metode": metode_result
+        })
+    except Exception as e:
+        print(f"[API] api_admin_laporan error: {e}")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 

@@ -1930,43 +1930,137 @@ def check_store_status():
     return True, ""
 
 def get_random_masked_name():
-    # FIX v11: Tambah jadi 80+ nama biar variatif
-    list_nama_tele = [
-        "@R_Zky***", "@Alvinn_***", "@Dimas_99***", "@RezaPrat_***",
-        "@Bayu_Official***", "@Farel_X***", "@Yoga_Mlg***", "@DickyGez_***",
-        "@SuryaPratama***", "@RamaWicak***", "@Gilang_ID***", "@BagasKusn***",
-        "@Arif_Wd***", "@DaniPratama***", "@Hendra_99***", "@Rian_Xyz***",
-        "@Aldi_07***", "@Bintang_ID***", "@CandraPras***", "@DikaPrast_***",
-        "@Fajar_01***", "@GalihGmr***", "@IqbalID***", "@JokoPrasetyo***",
-        "@KevinWdj***", "@LukmanHkm***", "@MaulanaID***", "@NaufalXyz***",
-        "@Pratama99***", "@RafliSultan***", "@SatriaGaming***", "@TegarGanz***",
-        "@VianID***", "@WahyuPrat***", "@YudaDev***", "@ZakiMlf***",
-        "@Amirul_My***", "@Haikal_Iskandar***", "@Farhan_Zul***", "@Aiman_Badri***",
-        "@Aqil_Danial***", "@Syahmi_Zain***", "@Luqman_Hakim***", "@Zulhelmi_My***",
-        "@Alex_Walker***", "@Liam_Smith***", "@Noah_Miller***", "@Oliver_Davis***",
-        "@Sultan_Mlbb***", "@Anjay_Mabar***", "@Gacor_Gaming***", "@TopGlobal_1***",
-        "@Zul_Ganz***", "@Rizky_Store***", "@Ibnu_Hkm***", "@Pandu_ID***",
-        "@Fikri_Xp***", "@Aditya_Prat***", "@Eko_Cyber***", "@Bayu_Sena***",
-        "@angga_99***", "@febri_nj***", "@putra_ml***", "@rendi_sultan***",
-        "@agung_Gz***", "@bagus_ID***", "@deni_Xyz***", "@eko_prast***",
-        "@gilang_store***", "@heru_mlbb***", "@ilham_ganz***", "@jeri_xpl***",
-        "@kiki_pro***", "@lutfi_ID***", "@miko_sultan***", "@opan_gamer***",
-        "@rama_cell***", "@rendra_ID***", "@septian_mz***", "@tegar_store***",
-        "@rizal_mlbb***", "@yoga_sultan***", "@zidan_ID***", "@dika_store***",
+    """200 nama unik random."""
+    names = [
+        "@R_Zky***","@Jamal_ID***","@Doni_Official***","@Bagas_Kusuma***","@Farel_X***","@Yoga_Prat***",
+        "@Dicky_Gez***","@Surya_Darma***","@Alex_Walker***","@Dani_Prat***","@Hendra_99***","@Rian_Xyz***",
+        "@Aldi_Saputra***","@Bintang_ID***","@Candra_Pras***","@Kevin_Wijaya***","@Lukman_Hkm***","@MaulanaID***",
+        "@Naufal_Xyz***","@Pratama99***","@Rafli_Sultan***","@Satria_Game***","@Tegar_Ganz***","@Vian_ID***",
+        "@Wahyu_Prat***","@Yuda_Dev***","@Zaki_Mlf***","@Amirul_My***","@Haikal_Isk***","@Farhan_Zul***",
+        "@Aiman_Badri***","@Aqil_Danial***","@Syahmi_Zain***","@Luqman_Hakim***","@Zulhelmi_My***","@Liam_Smith***",
+        "@Noah_Miller***","@Oliver_Davis***","@Sultan_Mlbb***","@Anjay_Mabar***","@Gacor_Game***","@TopGlobal_1***",
+        "@Zul_Ganz***","@Rizky_Store***","@Ibnu_Hkm***","@Pandu_ID***","@Fikri_Xp***","@Aditya_Prat***",
+        "@Eko_Cyber***","@Bayu_Sena***","@Angga_99***","@Febri_Nj***","@Putra_Ml***","@Rendi_Sultan***",
+        "@Agung_Gz***","@Bagus_ID***","@Deni_Xyz***","@Eko_Prast***","@Gilang_Store***","@Heru_Mlbb***",
+        "@Ilham_Ganz***","@Jeri_Xpl***","@Kiki_Pro***","@Lutfi_ID***","@Miko_Sultan***","@Opan_Gamer***",
+        "@Rama_Cell***","@Rendra_ID***","@Septian_Mz***","@Tegar_Store***","@Rizal_Mlbb***","@Yoga_Sultan***",
+        "@Zidan_ID***","@Dika_Store***","@Arif_Wd***","@Dani_Pratama***","@Hendra_Putra***","@Rian_Wijaya***",
+        "@Cahyo_ID***","@Fajar_Saputra***","@Galih_Prat***","@Hafiz_Xyz***","@Iqbal_Store***","@Joko_Susilo***",
+        "@Krisna_Dev***","@Maulana_Zul***","@Nanda_Prat***","@Oscar_Wij***","@Putra_Sultan***","@Rafi_Ganz***",
+        "@Surya_Dev***","@Tio_Mlbb***","@Umar_ID***","@Vino_Sultan***","@Wahyu_Dev***","@Yudha_Prat***",
+        "@Zulfikar_ID***","@Ahmad_Zaki***","@Budi_Setia***","@Cahyo_Prat***","@Dhani_ID***","@Erik_Mlbb***",
+        "@Fauzan_Sultan***","@Gani_Prat***","@Haris_Dev***","@Imam_Ganz***","@Jaka_Sultan***","@Kurnia_ID***",
+        "@Lukman_Dev***","@Mega_Sultan***","@Nasir_Prat***","@Oki_Ganz***","@Pandu_Store***","@Qori_ID***",
+        "@Rama_Dev***","@Sandi_Sultan***","@Taufik_Prat***","@Udin_Store***","@Vian_Dev***","@Wawan_ID***",
+        "@Yanto_Prat***","@Zaky_Sultan***","@Adit_Ganz***","@Bram_Store***","@Cakra_ID***","@Dhika_Prat***",
+        "@Elang_Dev***","@Fikri_Sultan***","@Gaza_Prat***","@Hanif_ID***","@Ivan_Mlbb***","@Jihan_Sultan***",
+        "@Kevin_Prat***","@Lukman_Store***","@Mirza_Dev***","@Nabil_ID***","@Okta_Sultan***","@Panji_Prat***",
+        "@Rafi_Dev***","@Satria_Store***","@Tama_ID***","@Uchiha_Dev***","@Vino_Prat***","@Wira_Sultan***",
+        "@Yafi_ID***","@Zaki_Dev***","@Ardi_Store***","@Bayu_Mlbb***","@Cahya_Prat***","@Dika_Sultan***",
+        "@Ega_Dev***","@Faisal_ID***","@Galih_Store***","@Hendra_Dev***","@Irfan_Sultan***","@Joni_Prat***",
+        "@Kiki_Dev***","@Lintang_ID***","@Mega_Prat***","@Naufal_Store***","@Oki_Dev***","@Putra_Mlbb***",
+        "@Rendi_Prat***","@Sandi_Dev***","@Teguh_Sultan***","@Umar_Prat***","@Vega_ID***","@Wahyu_Store***",
+        "@Yoga_Dev***","@Zaky_Prat***","@Agus_Sultan***","@Bagas_Dev***","@Cahyo_Store***","@Dewa_ID***",
+        "@Eka_Prat***","@Fajar_Dev***","@Gilang_Sultan***","@Hendra_Store***","@Iqbal_Dev***","@Joko_Prat***",
+        "@Krisna_ID***","@Lukman_Sultan***","@Maul_Dev***","@Nanda_Store***","@Oscar_Prat***","@Putra_Dev***",
+        "@Rafi_ID***","@Satria_Dev***","@Tio_Sultan***","@Umar_Dev***","@Vino_ID***","@Wahyu_Sultan***",
+        "@Yoga_Store***","@Zaki_Prat***","@Arif_Sultan***","@Bagas_Store***","@Cahyo_Dev***","@Dika_ID***",
+        "@Hendra_Wij***","@Rio_Prat***","@Yudi_Dev***","@Zain_ID***","@Adi_Store***","@Budi_Dev***"
     ]
-    return random.choice(list_nama_tele)
+    return random.choice(names)
+
+
+
+
+
+
+def _get_all_paket_for_fake():
+    """Ambil semua paket (default + custom + override) buat fake testimoni."""
+    paket_list = []
+    try:
+        # Dari MASTER_PAKET (default)
+        for kode, data in MASTER_PAKET.items():
+            try:
+                nama, harga, harga_str, poin, deskripsi = data
+                paket_list.append((nama, harga_str, str(poin) + " Poin"))
+            except Exception:
+                continue
+        # Dari custom paket
+        try:
+            custom = read_custom_paket()
+            for kode, p in custom.items():
+                try:
+                    harga_str = "Rp " + format(p['harga'], ",").replace(",", ".")
+                    paket_list.append((p['nama'], harga_str, str(p['poin']) + " Poin"))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        # Dari override (kalau ada harga/poin diubah)
+        try:
+            ov = read_paket_override()
+            for kode, vals in ov.items():
+                for i, (nm, hs, po) in enumerate(paket_list):
+                    if kode in MASTER_PAKET and MASTER_PAKET[kode][0] == nm:
+                        new_hs = "Rp " + format(vals['harga'], ",").replace(",", ".")
+                        paket_list[i] = (nm, new_hs, str(vals['poin']) + " Poin")
+                        break
+        except Exception:
+            pass
+    except Exception as e:
+        log_error("_get_all_paket_for_fake", e)
+    return paket_list if paket_list else [
+        ("Sultan One Hit 100% (30 Hari)", "Rp 150.000", "55 Poin")
+    ]
+
+
+
+
+def _write_testimoni_grup(text, nama=None, paket=None, harga=None):
+    try:
+        with _safe_lock("testimoni_grup"):
+            import random as _r
+            global _testi_name_pool, _testi_name_used
+            if not _testi_name_pool:
+                _testi_name_pool = []
+                for _ in range(50):
+                    n = get_random_masked_name()
+                    if n not in _testi_name_pool:
+                        _testi_name_pool.append(n)
+                _testi_name_used = []
+            avail = [n for n in _testi_name_pool if n not in _testi_name_used[-20:]]
+            if not avail:
+                _testi_name_used = []
+                avail = _testi_name_pool[:]
+            nm = nama if nama else _r.choice(avail)
+            _testi_name_used.append(nm)
+            if paket is None:
+                pl = _get_all_paket_for_fake()
+                if pl:
+                    p = _r.choice(pl)
+                    paket = p[0]
+                    harga = p[1]
+                else:
+                    paket = "Sultan One Hit 100% (30 Hari)"
+                    harga = "Rp 150.000"
+            ts = int(time.time())
+            line = str(ts) + "|" + str(nm) + "|" + str(paket) + "|" + str(harga) + chr(10)
+            with open(F_TESTIMONI_GRUP, "a") as f:
+                f.write(line)
+            try:
+                with open(F_TESTIMONI_GRUP, "r") as f:
+                    all_l = f.readlines()
+                if len(all_l) > 500:
+                    with open(F_TESTIMONI_GRUP, "w") as f:
+                        f.writelines(all_l[-300:])
+            except Exception:
+                pass
+    except Exception as e:
+        log_error("_write_testimoni_grup", e)
+
 
 def generate_single_testimonial():
-    list_paket = [
-        ("Natural Balance (30 Hari)", "Rp 120.000", "45 Poin"),
-        ("Light VIP + Drone (30 Hari)", "Rp 95.000", "35 Poin"),
-        ("Semi-Safe 14 Hari", "Rp 75.000", "25 Poin"),
-        ("Lifetime Safe Permanent", "Rp 200.000", "75 Poin"),
-        ("Sultan One Hit 100% (30 Hari)", "Rp 150.000", "55 Poin"),
-        ("VIP Pro One Hit 80% (30 Hari)", "Rp 100.000", "40 Poin"),
-        ("Semi-Private 14 Hari", "Rp 75.000", "25 Poin"),
-        ("Permanent Legend (Lifetime)", "Rp 250.000", "90 Poin")
-    ]
+    list_paket = _get_all_paket_for_fake()
     nama = get_random_masked_name()
     paket, harga_rp, harga_poin = random.choice(list_paket)
     menit_lalu = random.randint(2, 45)
@@ -1974,18 +2068,15 @@ def generate_single_testimonial():
     waktu_ket = "pagi ini" if 4 <= current_hour < 11 else (
         "siang ini" if 11 <= current_hour < 15 else (
             "sore ini" if 15 <= current_hour < 18 else "malam ini"))
-
     is_poin_pay = random.random() < 0.3
     if is_poin_pay:
-        price_text = f"{harga_poin} (Klaim Saldo Poin Loyalitas ✨)"
+        price_text = f"{harga_poin} (Klaim Saldo Poin Loyalitas \u2728)"
         pay_method_label = "REDEEMED VIA LOYALTY POINTS"
     else:
         price_text = harga_rp
         pay_method_label = "SUCCESS & SCRIPT DELIVERED"
-
     reduce_stock_random_all()
     auto_restock_if_low()
-
     return (
         "🚨 REAL-TIME TRANSACTION REPORT 🚨\n\n"
         f"✅ Buyer ID: {nama}\n"
@@ -1998,11 +2089,8 @@ def generate_single_testimonial():
     )
 
 def generate_fake_testimonials_list():
-    list_paket = [
-        ("Natural Balance", "Rp 120.000"), ("Light VIP + Drone", "Rp 95.000"),
-        ("Semi-Safe 14 Hari", "Rp 75.000"), ("Lifetime Safe Permanent", "Rp 200.000"),
-        ("Sultan One Hit 100%", "Rp 150.000"), ("VIP Pro One Hit 80%", "Rp 100.000")
-    ]
+    list_paket_raw = _get_all_paket_for_fake()
+    list_paket = [(p[0], p[1]) for p in list_paket_raw]
     testi_output = ""
     for i in range(1, 6):
         nama = get_random_masked_name()
@@ -3713,9 +3801,12 @@ def admin_push_testi(message):
     if not is_any_admin(message.from_user.id):
         return
     try:
-        bot.send_message(chat_id=GROUP_CHAT_ID, text=generate_single_testimonial(),
+        _tt = generate_single_testimonial()
+        bot.send_message(chat_id=GROUP_CHAT_ID, text=_tt,
                          message_thread_id=GROUP_TOPIC_ID, disable_web_page_preview=True)
-        bot.reply_to(message, "✅ Testimoni terkirim ke grup. (Stok otomatis turun!)")
+        try: _write_testimoni_grup(_tt)
+        except Exception: pass
+        bot.reply_to(message, "✅ Testimoni terkirim ke grup + APK sync!")
     except Exception as e:
         bot.reply_to(message, f"⚠️ Gagal: {e}")
 
@@ -5333,6 +5424,7 @@ F_PAKET_OVERRIDE = os.path.join(DATA_DIR, "paket_override.txt")
 F_BLACKLIST = os.path.join(DATA_DIR, "blacklist_paket.txt")
 F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
 F_TESTIMONI = os.path.join(DATA_DIR, "testimoni.txt")
+F_TESTIMONI_GRUP = os.path.join(DATA_DIR, "testimoni_grup.txt")
 F_INBOX = os.path.join(DATA_DIR, "inbox.txt")
 F_ERROR_LOG_API = os.path.join(DATA_DIR, "client_errors.txt")
 F_SPAM_LOG = os.path.join(DATA_DIR, "spam_log.txt")
