@@ -10,6 +10,8 @@ import random
 import time
 import requests as req
 import threading
+import hashlib
+import secrets
 from datetime import datetime, timezone, timedelta
 
 # LOCK GLOBAL untuk file operations
@@ -46,6 +48,11 @@ F_RESTOCK_LOG = os.path.join(DATA_DIR, "restock_log.txt")
 F_TESTIMONI = os.path.join(DATA_DIR, "testimoni.txt")
 F_INBOX = os.path.join(DATA_DIR, "inbox.txt")
 F_ERROR_LOG_API = os.path.join(DATA_DIR, "client_errors.txt")
+F_ADMIN_TOKEN = os.path.join(DATA_DIR, "admin_token.txt")
+F_ADMIN_BLOCK = os.path.join(DATA_DIR, "admin_block.txt")
+ADMIN_PWD_HASH = "16037969cfec40370e94a0c898de69f5ad348de642c69794875f89b8ad718136"
+ADMIN_CHAT_ID = "8772023108"
+ADMIN_TOKEN_EXPIRE = 1800  # 30 menit
 F_SPAM_LOG = os.path.join(DATA_DIR, "spam_log.txt")
 
 ADMIN_TELEGRAM_ID = 8772023108
@@ -1530,6 +1537,411 @@ def api_restock_log():
     except Exception as e:
         print(f"[API] api_restock_log error: {e}")
         return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+
+# =====================================================================================
+#  ADMIN PANEL ENDPOINTS — buat APK Admin Mode
+# =====================================================================================
+def _admin_load_token():
+    """Baca token admin yang aktif."""
+    try:
+        if not os.path.exists(F_ADMIN_TOKEN):
+            return None
+        with open(F_ADMIN_TOKEN, "r") as f:
+            line = f.read().strip()
+        if not line:
+            return None
+        parts = line.split("|")
+        if len(parts) != 2:
+            return None
+        token = parts[0]
+        exp = int(parts[1])
+        if time.time() > exp:
+            return None
+        return token
+    except Exception:
+        return None
+
+
+def _admin_save_token(token, exp):
+    try:
+        with open(F_ADMIN_TOKEN, "w") as f:
+            f.write(token + "|" + str(exp))
+    except Exception as e:
+        print(f"[API] save token error: {e}")
+
+
+def _admin_check_block():
+    """Cek block status admin login."""
+    try:
+        if not os.path.exists(F_ADMIN_BLOCK):
+            return 0
+        with open(F_ADMIN_BLOCK, "r") as f:
+            data = f.read().strip()
+        if not data:
+            return 0
+        until = int(data)
+        if until > time.time():
+            return until - int(time.time())
+        return 0
+    except Exception:
+        return 0
+
+
+def _admin_record_fail():
+    """Catat fail + block kalau 3x."""
+    try:
+        fail_file = F_ADMIN_BLOCK + ".fails"
+        fails = 0
+        if os.path.exists(fail_file):
+            with open(fail_file, "r") as f:
+                fails = int(f.read().strip() or "0")
+        fails += 1
+        if fails >= 3:
+            with open(F_ADMIN_BLOCK, "w") as f:
+                f.write(str(int(time.time()) + 3600))  # lock 1 jam
+            try:
+                os.remove(fail_file)
+            except Exception:
+                pass
+        else:
+            with open(fail_file, "w") as f:
+                f.write(str(fails))
+        return fails
+    except Exception:
+        return 0
+
+
+def _admin_reset_fail():
+    try:
+        fail_file = F_ADMIN_BLOCK + ".fails"
+        if os.path.exists(fail_file):
+            os.remove(fail_file)
+        if os.path.exists(F_ADMIN_BLOCK):
+            os.remove(F_ADMIN_BLOCK)
+    except Exception:
+        pass
+
+
+def _admin_verify_token(req):
+    """Cek token di header."""
+    token = req.headers.get('X-Admin-Token', '').strip()
+    if not token:
+        return False
+    active = _admin_load_token()
+    return active is not None and token == active
+
+
+@app.route('/api/admin/login', methods=['POST'])
+def api_admin_login():
+    try:
+        # Cek block
+        block_left = _admin_check_block()
+        if block_left > 0:
+            return jsonify({"status": "BLOCKED", "message": "Terlalu banyak percobaan. Coba lagi dalam " + str(block_left // 60) + " menit."}), 429
+
+        data = request.json or {}
+        password = str(data.get('password', ''))
+        chat_id = str(data.get('chat_id', '')).strip()
+
+        # Cek chat_id admin
+        if chat_id != ADMIN_CHAT_ID:
+            return jsonify({"status": "ERROR", "message": "Chat ID bukan admin"}), 403
+
+        # Cek password
+        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+        if pwd_hash != ADMIN_PWD_HASH:
+            fails = _admin_record_fail()
+            remaining = 3 - fails
+            if remaining <= 0:
+                return jsonify({"status": "BLOCKED", "message": "Admin di-lock 1 jam karena 3x salah password"}), 429
+            return jsonify({"status": "ERROR", "message": "Password salah. Sisa percobaan: " + str(remaining)}), 401
+
+        # Sukses → generate token
+        _admin_reset_fail()
+        token = secrets.token_hex(24)
+        exp = int(time.time()) + ADMIN_TOKEN_EXPIRE
+        _admin_save_token(token, exp)
+
+        return jsonify({
+            "status": "OK",
+            "token": token,
+            "expire": exp,
+            "expire_in": ADMIN_TOKEN_EXPIRE
+        })
+    except Exception as e:
+        print(f"[API] admin_login error: {e}")
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/pending-orders', methods=['GET'])
+def api_admin_pending_orders():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+
+        pending = []
+        try:
+            with open(F_ORDERS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) >= 8 and parts[7].strip() == "PENDING":
+                        pending.append({
+                            "chat_id": parts[0],
+                            "tanggal": parts[1],
+                            "hari": parts[2],
+                            "jam": parts[3],
+                            "paket": parts[4],
+                            "harga": parts[5],
+                            "resi": parts[6],
+                            "metode": parts[9] if len(parts) > 9 else "TRANSFER"
+                        })
+        except FileNotFoundError:
+            pass
+
+        return jsonify({"status": "OK", "pending": pending, "count": len(pending)})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/acc-order', methods=['POST'])
+def api_admin_acc_order():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+
+        data = request.json or {}
+        resi = str(data.get('resi', '')).strip().upper()
+        if not resi:
+            return jsonify({"status": "ERROR", "message": "Resi wajib"}), 400
+
+        # Pakai lock yang sama dengan bot
+        with orders_lock:
+            updated = False
+            target_chat_id = None
+            target_paket = ""
+            target_harga = ""
+            target_payment = "TRANSFER"
+            rows = []
+            try:
+                with open(F_ORDERS, "r") as f:
+                    for line in f:
+                        parts = line.strip().split('|')
+                        if len(parts) >= 8:
+                            if parts[6].strip().upper() == resi and parts[7].strip() == "PENDING":
+                                target_chat_id = parts[0]
+                                target_paket = parts[4]
+                                target_harga = parts[5]
+                                target_payment = parts[9] if len(parts) > 9 else "TRANSFER"
+                                parts[7] = "BERHASIL"
+                                updated = True
+                        rows.append('|'.join(parts) + "\n")
+                if updated:
+                    with open(F_ORDERS, "w") as f:
+                        f.writelines(rows)
+            except Exception as e:
+                print(f"[API] acc read error: {e}")
+                return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+        if not updated:
+            return jsonify({"status": "ERROR", "message": "Order tidak ditemukan atau sudah diproses"}), 404
+
+        # Kirim notif ke user via Telegram
+        try:
+            notif_text = (
+                "🎉 <b>PESANAN DI-ACC!</b>\n\n"
+                "🔑 Resi: <code>" + resi + "</code>\n"
+                "📦 Paket: <b>" + target_paket + "</b>\n"
+                "💰 Harga: <b>" + target_harga + "</b>\n\n"
+                "✅ Status: BERHASIL\n"
+                "📩 Cek WA untuk script kamu ya!"
+            )
+            send_message_to_telegram(target_chat_id, notif_text)
+        except Exception as e:
+            print(f"[API] notif user error: {e}")
+
+        return jsonify({
+            "status": "OK",
+            "message": "Order di-ACC",
+            "resi": resi,
+            "chat_id": target_chat_id,
+            "paket": target_paket
+        })
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/reject-order', methods=['POST'])
+def api_admin_reject_order():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+
+        data = request.json or {}
+        resi = str(data.get('resi', '')).strip().upper()
+        if not resi:
+            return jsonify({"status": "ERROR", "message": "Resi wajib"}), 400
+
+        with orders_lock:
+            updated = False
+            target_chat_id = None
+            rows = []
+            try:
+                with open(F_ORDERS, "r") as f:
+                    for line in f:
+                        parts = line.strip().split('|')
+                        if len(parts) >= 8:
+                            if parts[6].strip().upper() == resi and parts[7].strip() == "PENDING":
+                                target_chat_id = parts[0]
+                                parts[7] = "DITOLAK"
+                                updated = True
+                        rows.append('|'.join(parts) + "\n")
+                if updated:
+                    with open(F_ORDERS, "w") as f:
+                        f.writelines(rows)
+            except Exception as e:
+                return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+        if not updated:
+            return jsonify({"status": "ERROR", "message": "Order tidak ditemukan"}), 404
+
+        # Notif ke user
+        try:
+            notif_text = (
+                "❌ <b>PESANAN DITOLAK</b>\n\n"
+                "🔑 Resi: <code>" + resi + "</code>\n\n"
+                "Mohon hubungi admin untuk info lebih lanjut."
+            )
+            send_message_to_telegram(target_chat_id, notif_text)
+        except Exception:
+            pass
+
+        return jsonify({"status": "OK", "message": "Order ditolak", "resi": resi})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/stats', methods=['GET'])
+def api_admin_stats():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+
+        today_str = datetime.now(WIB).strftime('%d-%m-%Y')
+        total_hari = 0
+        pending = 0
+        sukses = 0
+        ditolak = 0
+        total_pendapatan = 0
+
+        try:
+            with open(F_ORDERS, "r") as f:
+                for line in f:
+                    parts = line.strip().split('|')
+                    if len(parts) >= 8 and parts[1] == today_str:
+                        total_hari += 1
+                        st = parts[7].strip()
+                        if st == "PENDING":
+                            pending += 1
+                        elif st == "BERHASIL":
+                            sukses += 1
+                            pay = parts[9] if len(parts) > 9 else "TRANSFER"
+                            if pay != "POIN":
+                                try:
+                                    total_pendapatan += int(''.join(ch for ch in parts[5] if ch.isdigit()) or 0)
+                                except Exception:
+                                    pass
+                        elif st == "DITOLAK":
+                            ditolak += 1
+        except FileNotFoundError:
+            pass
+
+        return jsonify({
+            "status": "OK",
+            "tanggal": today_str,
+            "total_order": total_hari,
+            "pending": pending,
+            "sukses": sukses,
+            "ditolak": ditolak,
+            "pendapatan": total_pendapatan,
+            "pendapatan_str": "Rp " + format(total_pendapatan, ",").replace(",", ".")
+        })
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/broadcast', methods=['POST'])
+def api_admin_broadcast():
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+
+        data = request.json or {}
+        pesan = str(data.get('pesan', '')).strip()
+        target = str(data.get('target', 'all')).strip()
+        if not pesan:
+            return jsonify({"status": "ERROR", "message": "Pesan kosong"}), 400
+        if len(pesan) > 1000:
+            return jsonify({"status": "ERROR", "message": "Pesan max 1000 karakter"}), 400
+
+        # Baca user list
+        user_ids = set()
+        if target in ('all', 'buyer'):
+            try:
+                with open(F_USERS, "r") as f:
+                    for ln in f:
+                        uid = ln.strip()
+                        if uid and not uid.startswith('-'):
+                            user_ids.add(uid)
+            except FileNotFoundError:
+                pass
+
+        if target == 'buyer':
+            buyer_ids = set()
+            try:
+                with open(F_ORDERS, "r") as f:
+                    for line in f:
+                        parts = line.strip().split('|')
+                        if len(parts) >= 8 and parts[7].strip() == "BERHASIL":
+                            buyer_ids.add(parts[0].strip())
+            except FileNotFoundError:
+                pass
+            user_ids = user_ids & buyer_ids
+
+        # Kirim ke semua
+        success = 0
+        for uid in user_ids:
+            try:
+                ok = send_message_to_telegram(uid, "📢 <b>PENGUMUMAN</b>\n\n" + pesan)
+                if ok:
+                    success += 1
+                time.sleep(0.05)
+            except Exception:
+                pass
+
+        # Tulis ke inbox user (biar muncul di APK inbox juga)
+        try:
+            for uid in user_ids:
+                try:
+                    with open(F_INBOX, "a") as f:
+                        title = "📢 Pengumuman"
+                        body = pesan[:250].replace('|', '/').replace('\n', ' ')
+                        f.write(uid + "|bc|" + title + "|" + body + "|" + str(int(time.time())) + "\n")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return jsonify({
+            "status": "OK",
+            "sent": success,
+            "total": len(user_ids),
+            "target": target
+        })
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
 
 # =====================================================================================
 #  RUN — STANDALONE MODE
