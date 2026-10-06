@@ -53,7 +53,7 @@ F_ADMIN_TOKEN = os.path.join(DATA_DIR, "admin_token.txt")
 F_ADMIN_BLOCK = os.path.join(DATA_DIR, "admin_block.txt")
 ADMIN_PWD_HASH = "16037969cfec40370e94a0c898de69f5ad348de642c69794875f89b8ad718136"
 ADMIN_CHAT_ID = "8772023108"
-ADMIN_TOKEN_EXPIRE = 1800  # 30 menit
+ADMIN_TOKEN_EXPIRE = 604800  # 7 hari
 F_SPAM_LOG = os.path.join(DATA_DIR, "spam_log.txt")
 
 ADMIN_TELEGRAM_ID = 8772023108
