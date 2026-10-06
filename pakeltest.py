@@ -6044,16 +6044,12 @@ def cmd_hapus_poin_user(message):
 # =====================================================================================
 #  COMMAND: /fixcustompaket — Bersihin custom_paket.txt dari baris rusak
 # =====================================================================================
-@bot.message_handler(commands=['fixcustompaket'])
 
 
-@bot.message_handler(commands=['cleartestimoni'])
 
 
-@bot.message_handler(commands=['clearinbox'])
 
 
-@bot.message_handler(commands=['securitystatus', 'secstat'])
 
 
 @bot.message_handler(commands=['recenterrors', 'errors'])
@@ -6143,6 +6139,7 @@ def cmd_clearerrors(message):
         bot.reply_to(message, "Gagal: " + str(e))
 
 
+@bot.message_handler(commands=['securitystatus', 'secstat'])
 def cmd_securitystatus(message):
     if not is_super_admin(message.chat.id):
         return
@@ -6206,6 +6203,7 @@ def cmd_unblock(message):
         bot.reply_to(message, "Gagal: " + str(e))
 
 
+@bot.message_handler(commands=['clearinbox'])
 def cmd_clearinbox(message):
     if not is_super_admin(message.chat.id):
         return
@@ -6240,6 +6238,7 @@ def cmd_inboxstats(message):
         bot.reply_to(message, "Gagal: " + str(e))
 
 
+@bot.message_handler(commands=['cleartestimoni'])
 def cmd_cleartestimoni(message):
     if not is_super_admin(message.chat.id):
         return
@@ -6251,6 +6250,7 @@ def cmd_cleartestimoni(message):
         bot.reply_to(message, "Gagal: " + str(e))
 
 
+@bot.message_handler(commands=['fixcustompaket'])
 def cmd_fixcustompaket(message):
     if not is_super_admin(message.chat.id):
         return
