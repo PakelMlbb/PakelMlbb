@@ -624,6 +624,83 @@ def _get_all_paket_for_fake_api():
     ]
 
 
+def _api_write_testimoni_real(chat_id, paket, harga, metode):
+    try:
+        cid=str(chat_id)
+        masked="User***"+cid[-4:] if len(cid)>4 else "User***"
+        ts=int(time.time())
+        line=cid+"|"+masked+"|"+str(paket).replace("|","/")+"|"+str(harga).replace("|","/")+"|"+str(ts)+"|"+str(metode).replace("|","/")+chr(10)
+        with open(F_TESTIMONI,"a") as f: f.write(line)
+    except Exception as e: print("[API] testi err: "+str(e))
+
+def _api_set_coupon_status(chat_id, status_baru):
+    try:
+        cid=str(chat_id); rows=[]; upd=False
+        if os.path.exists(F_COUPONS):
+            with open(F_COUPONS,"r") as f:
+                for line in f:
+                    p=line.strip().split("|")
+                    if len(p)==2:
+                        if p[0]==cid: p[1]=status_baru; upd=True
+                        rows.append(p[0]+"|"+p[1]+chr(10))
+        if not upd: rows.append(cid+"|"+status_baru+chr(10))
+        tmp=F_COUPONS+".tmp"
+        with open(tmp,"w") as f: f.writelines(rows)
+        if os.path.exists(F_COUPONS): os.remove(F_COUPONS)
+        os.rename(tmp,F_COUPONS)
+    except Exception as e: print("[API] coupon err: "+str(e))
+
+def _api_write_inbox(chat_id, tipe, title, body):
+    try:
+        t=str(title).replace("|","/")[:80]
+        b=str(body).replace("|","/")[:300]
+        with open(F_INBOX,"a") as f:
+            f.write(str(chat_id)+"|"+str(tipe)+"|"+t+"|"+b+"|"+str(int(time.time()))+chr(10))
+    except Exception as e: print("[API] inbox err: "+str(e))
+
+def _api_get_tier_multiplier(chat_id):
+    tot=count_user_success_orders(chat_id)
+    if tot>=30: return 2.0
+    if tot>=15: return 1.5
+    if tot>=5: return 1.2
+    return 1.0
+
+def _api_add_points(chat_id, amount, alasan):
+    try:
+        cur=read_points(chat_id); new_t=cur+amount
+        rows=[]; upd=False; cid=str(chat_id)
+        try:
+            with open(F_POINTS,"r") as f:
+                for line in f:
+                    p=line.strip().split("|")
+                    if len(p)==2:
+                        if p[0]==cid: p[1]=str(new_t); upd=True
+                        rows.append(p[0]+"|"+p[1]+chr(10))
+        except FileNotFoundError: pass
+        if not upd: rows.append(cid+"|"+str(new_t)+chr(10))
+        with open(F_POINTS,"w") as f: f.writelines(rows)
+        try:
+            now=datetime.now(WIB).strftime("%d-%m-%Y %H:%M:%S")
+            with open(F_POINTLOG,"a") as f: f.write(cid+"|"+now+"|+"+str(amount)+"|"+str(alasan)+chr(10))
+        except Exception: pass
+    except Exception as e: print("[API] addpt err: "+str(e))
+
+def _api_reduce_stock_by_name(nama_paket, jumlah):
+    try:
+        allp=get_all_paket_combined_api()
+        kode=None
+        for k,v in allp.items():
+            if v["nama"]==nama_paket: kode=k; break
+        if not kode: return
+        st=read_stocks()
+        if kode in st:
+            st[kode]=max(0,st[kode]-jumlah)
+            with open(F_STOCKS,"w") as f:
+                nt=int(time.time())
+                for c,s in st.items(): f.write(c+"|"+str(s)+"|"+str(nt)+chr(10))
+    except Exception as e: print("[API] stok err: "+str(e))
+
+
 def read_paket_override_api():
     ov = {}
     try:
@@ -787,6 +864,29 @@ def send_message_to_telegram(chat_id, text):
 #  API ENDPOINTS
 # =====================================================================================
 @app.route('/', methods=['GET'])
+
+def send_message_with_buttons_to_telegram(chat_id, text, reply_markup=None, thread_id=None):
+    try:
+        if not TELEGRAM_TOKEN:
+            return False
+        url = "https://api.telegram.org/bot" + TELEGRAM_TOKEN + "/sendMessage"
+        data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+        if thread_id:
+            data["message_thread_id"] = thread_id
+        if reply_markup:
+            data["reply_markup"] = json.dumps(reply_markup)
+        r = req.post(url, data=data, timeout=15)
+        if r.status_code == 200:
+            print("[API] Message+buttons sent to " + str(chat_id))
+            return True
+        else:
+            print("[API] Telegram error: " + str(r.status_code) + " " + r.text[:200])
+            return False
+    except Exception as e:
+        print("[API] send_message_with_buttons error: " + str(e))
+        return False
+
+
 def home():
     ensure_stocks_file()
     return jsonify({
@@ -878,7 +978,7 @@ def create_order():
                         "message": "Poin tidak cukup! Butuh " + str(poin_dibutuhkan) + " poin, saldo kamu " + str(saldo_poin) + " poin."
                     }), 400
 
-                add_user_points(chat_id, -poin_dibutuhkan, "Tukar Paket " + nama)
+                # FIX P2: JANGAN potong poin sekarang, tunggu admin ACC
 
                 resi = "PKL-MLBB-" + str(random.randint(10000, 99999))
                 now = datetime.now(WIB)
@@ -889,7 +989,7 @@ def create_order():
                 ts = int(now.timestamp())
 
                 order_line = (str(chat_id) + "|" + tanggal + "|" + hari + "|" + jam + "|" + nama + "|" +
-                              str(poin_dibutuhkan) + " POIN|" + resi + "|BERHASIL|" + str(ts) +
+                              str(poin_dibutuhkan) + " POIN|" + resi + "|PENDING|" + str(ts) +
                               "|POIN|" + str(poin_dibutuhkan) + "|0\n")
                 with open(F_ORDERS, "a") as f:
                     f.write(order_line)
@@ -897,18 +997,41 @@ def create_order():
                 try:
                     import threading as _th
                     _notif_text = (
-                        "ORDER PAKAI POIN!\n\n"
+                        "\U0001F1F5\U0001F1F7 <b>ORDER PAKAI POIN (PENDING)!</b>\n\n"
                         "Chat ID: <code>" + str(chat_id) + "</code>\n"
                         "Paket: <b>" + nama + "</b>\n"
-                        "Poin Terpakai: " + str(poin_dibutuhkan) + "\n"
-                        "Saldo Sisa: " + str(saldo_poin - poin_dibutuhkan) + " poin\n"
+                        "Poin Dibutuhkan: <b>" + str(poin_dibutuhkan) + "</b>\n"
+                        "Saldo User: " + str(saldo_poin) + " poin\n"
                         "Resi: <code>" + resi + "</code>\n"
                         "Waktu: " + hari + ", " + tanggal + " " + jam + "\n\n"
-                        "<i>Order BERHASIL otomatis. Kirim script ke user!</i>"
+                        "<i>ACC untuk potong poin & aktifkan order.</i>"
                     )
+                    # Notif ke admin personal
                     _th.Thread(
                         target=send_message_to_telegram,
                         args=(ADMIN_TELEGRAM_ID, _notif_text),
+                        daemon=True
+                    ).start()
+                    # FIX P2-B: Notif ke grup @Paysukses topik 5 dengan tombol ACC/TOLAK
+                    _grp_text = (
+                        "\U0001F1F5\U0001F1F7 <b>ORDER PAKAI POIN (PENDING)!</b>\n\n"
+                        "\U0001F464 User: <code>" + str(chat_id) + "</code>\n"
+                        "\U0001F4E6 Paket: <b>" + nama + "</b>\n"
+                        "\U0001F1F5 Poin Dibutuhkan: <b>" + str(poin_dibutuhkan) + " Poin</b>\n"
+                        "\U0001F4B0 Saldo User: " + str(saldo_poin) + " poin\n"
+                        "\U0001F511 Resi: <code>" + resi + "</code>\n"
+                        "\U0001F4C5 " + hari + ", " + tanggal + " " + jam + "\n\n"
+                        "<i>Cek saldo user, lalu ACC atau TOLAK.</i>"
+                    )
+                    _grp_buttons = {
+                        "inline_keyboard": [[
+                            {"text": "\u2705 ACC", "callback_data": "apoin|" + resi},
+                            {"text": "\u274C TOLAK", "callback_data": "tpoin|" + resi}
+                        ]]
+                    }
+                    _th.Thread(
+                        target=send_message_with_buttons_to_telegram,
+                        args=(GROUP_PAY_ID, _grp_text, _grp_buttons, GROUP_PAY_TOPIC_ID),
                         daemon=True
                     ).start()
                 except Exception as e:
@@ -916,14 +1039,15 @@ def create_order():
 
                 return jsonify({
                     "status": "OK",
-                    "message": "Order pakai poin berhasil!",
+                    "message": "Order pakai poin dibuat! Menunggu ACC admin.",
                     "resi": resi,
                     "harga_final": poin_dibutuhkan,
                     "harga_final_str": str(poin_dibutuhkan) + " Poin",
                     "paket": nama,
-                    "saldo_poin_sisa": saldo_poin - poin_dibutuhkan,
+                    "saldo_poin_sisa": saldo_poin,
                     "waktu": hari + ", " + tanggal + " " + jam,
-                    "payment_method": "POIN"
+                    "payment_method": "POIN",
+                    "pending": True
                 })
 
             harga_final = harga
@@ -1764,6 +1888,7 @@ def api_admin_acc_order():
             target_paket = ""
             target_harga = ""
             target_payment = "TRANSFER"
+            target_point_cost = 0
             rows = []
             try:
                 with open(F_ORDERS, "r") as f:
@@ -1775,6 +1900,10 @@ def api_admin_acc_order():
                                 target_paket = parts[4]
                                 target_harga = parts[5]
                                 target_payment = parts[9] if len(parts) > 9 else "TRANSFER"
+                                try:
+                                    target_point_cost = int(parts[10]) if len(parts) > 10 and parts[10].isdigit() else 0
+                                except Exception:
+                                    target_point_cost = 0
                                 parts[7] = "BERHASIL"
                                 updated = True
                         rows.append('|'.join(parts) + "\n")
@@ -1787,6 +1916,40 @@ def api_admin_acc_order():
 
         if not updated:
             return jsonify({"status": "ERROR", "message": "Order tidak ditemukan atau sudah diproses"}), 404
+        try: _api_set_coupon_status(target_chat_id, "USED")
+        except Exception: pass
+        try: _api_write_testimoni_real(target_chat_id, target_paket, target_harga, target_payment)
+        except Exception: pass
+        try: _api_write_inbox(target_chat_id, "order_acc", "Pesanan di-ACC!", "Paket "+str(target_paket)+" - "+str(target_harga))
+        except Exception: pass
+        if target_payment != "POIN":
+            try: _api_add_points(target_chat_id, int(10*_api_get_tier_multiplier(target_chat_id)), "Bonus via APK")
+            except Exception: pass
+        try: _api_reduce_stock_by_name(target_paket, 1)
+        except Exception: pass
+
+        # ===== FIX P2: Kalau POIN, cek saldo & potong sekarang =====
+        if target_payment == "POIN" and target_point_cost > 0:
+            saldo_sekarang = read_points(target_chat_id)
+            if saldo_sekarang < target_point_cost:
+                try:
+                    with orders_lock:
+                        with open(F_ORDERS, "r") as f:
+                            _lines_all = f.readlines()
+                        _new_lines = []
+                        for _ln in _lines_all:
+                            _pp = _ln.strip().split("|")
+                            if len(_pp) >= 8 and _pp[6].strip().upper() == resi:
+                                _pp[7] = "PENDING"
+                            _new_lines.append("|".join(_pp) + chr(10))
+                        with open(F_ORDERS, "w") as f:
+                            f.writelines(_new_lines)
+                except Exception:
+                    pass
+                return jsonify({"status": "ERROR", "message": "Poin user tidak cukup! Saldo: " + str(saldo_sekarang) + " poin, butuh: " + str(target_point_cost) + " poin. Order dibatalkan."}), 400
+            add_user_points(target_chat_id, -target_point_cost, "Tukar Paket via APK ACC")
+            print("[API] POIN " + str(target_point_cost) + " dipotong dari " + str(target_chat_id))
+
 
         # Kirim notif ke user via Telegram
         try:
@@ -1827,6 +1990,7 @@ def api_admin_reject_order():
         with orders_lock:
             updated = False
             target_chat_id = None
+            target_payment = "TRANSFER"
             rows = []
             try:
                 with open(F_ORDERS, "r") as f:
@@ -1835,6 +1999,7 @@ def api_admin_reject_order():
                         if len(parts) >= 8:
                             if parts[6].strip().upper() == resi and parts[7].strip() == "PENDING":
                                 target_chat_id = parts[0]
+                                target_payment = parts[9] if len(parts) > 9 else "TRANSFER"
                                 parts[7] = "DITOLAK"
                                 updated = True
                         rows.append('|'.join(parts) + "\n")
@@ -1846,6 +2011,11 @@ def api_admin_reject_order():
 
         if not updated:
             return jsonify({"status": "ERROR", "message": "Order tidak ditemukan"}), 404
+        try: _api_set_coupon_status(target_chat_id, "AVAILABLE")
+        except Exception: pass
+        try: _api_write_inbox(target_chat_id, "order_reject", "Pesanan ditolak", "Resi: "+str(resi))
+        except Exception: pass
+
 
         # Notif ke user
         try:

@@ -2222,8 +2222,11 @@ def background_auto_poster():
     while True:
         try:
             time.sleep(random.choice([1500, 3600, 7200, 10800]))
-            bot.send_message(chat_id=GROUP_CHAT_ID, text=generate_single_testimonial(),
+            _tt = generate_single_testimonial()
+            bot.send_message(chat_id=GROUP_CHAT_ID, text=_tt,
                              message_thread_id=GROUP_TOPIC_ID, disable_web_page_preview=True)
+            try: _write_testimoni_grup(_tt)
+            except Exception: pass
         except Exception as e:
             log_error("background_auto_poster", e)
             time.sleep(60)
