@@ -66,7 +66,7 @@ if __name__ == '__main__':
     try:
         from waitress import serve
         print("[MAIN] Using WAITRESS production server")
-        serve(app, host='0.0.0.0', port=port, threads=1, connection_limit=100)
+        serve(app, host='0.0.0.0', port=port, threads=4, connection_limit=100)
     except ImportError:
         print("[MAIN] ⚠️ waitress gak keinstall, fallback ke Flask dev server")
         print("[MAIN] Install: pip install waitress")
