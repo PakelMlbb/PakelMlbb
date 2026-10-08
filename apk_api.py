@@ -863,8 +863,6 @@ def send_message_to_telegram(chat_id, text):
 # =====================================================================================
 #  API ENDPOINTS
 # =====================================================================================
-@app.route('/', methods=['GET'])
-
 def send_message_with_buttons_to_telegram(chat_id, text, reply_markup=None, thread_id=None):
     try:
         if not TELEGRAM_TOKEN:
@@ -887,6 +885,7 @@ def send_message_with_buttons_to_telegram(chat_id, text, reply_markup=None, thre
         return False
 
 
+@app.route('/', methods=['GET'])
 def home():
     ensure_stocks_file()
     return jsonify({
@@ -1110,7 +1109,7 @@ def create_order():
                 "harga_final_str": "Rp " + str(harga_final), "paket": nama,
                 "voucher_diskon": voucher_rupiah,
                 "waktu": hari + ", " + tanggal + " " + jam,
-                "payment_method": "TRANSFER"
+                "payment_method": payment_method
             })
     except Exception as e:
         print(f"[API] create_order error: {e}")
