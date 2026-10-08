@@ -2838,6 +2838,153 @@ def api_admin_laporan():
 # =====================================================================================
 #  RUN — STANDALONE MODE
 # =====================================================================================
+
+
+# ============================================================
+# BACKEND v8.0 — FITUR BARU: CREATE PAKET + UNBLACKLIST + BLOCKED
+# ============================================================
+
+@app.route('/api/admin/create-paket', methods=['POST'])
+def api_admin_create_paket():
+    """Bikin paket custom baru + broadcast ke semua user."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        kode = str(data.get('kode', '')).strip().lower()
+        nama = str(data.get('nama', '')).strip()
+        try:
+            harga = int(data.get('harga', 0))
+            poin = int(data.get('poin', 0))
+            stok = int(data.get('stok', 50))
+        except (ValueError, TypeError):
+            return jsonify({"status": "ERROR", "message": "Harga/poin/stok harus angka"}), 400
+        deskripsi = str(data.get('deskripsi', '')).strip() or 'Paket custom'
+        kategori = str(data.get('kategori', 'murah')).strip().lower()
+
+        import re as _re
+        if not _re.match(r'^[a-z0-9_]+$', kode) or len(kode) < 3 or len(kode) > 30:
+            return jsonify({"status": "ERROR", "message": "Kode: a-z, 0-9, _, 3-30 char"}), 400
+        if len(nama) < 3 or len(nama) > 80:
+            return jsonify({"status": "ERROR", "message": "Nama 3-80 karakter"}), 400
+        if harga <= 0 or harga > 100000000:
+            return jsonify({"status": "ERROR", "message": "Harga 1-100jt"}), 400
+        if poin < 0 or poin > 100000:
+            return jsonify({"status": "ERROR", "message": "Poin 0-100rb"}), 400
+        if kategori not in ['sultan', 'pro', 'safe', 'murah']:
+            return jsonify({"status": "ERROR", "message": "Kategori: sultan/pro/safe/murah"}), 400
+
+        if kode in MASTER_PAKET:
+            return jsonify({"status": "ERROR", "message": "Kode bentrok paket default"}), 400
+        existing = read_custom_paket_api()
+        if kode in existing:
+            return jsonify({"status": "ERROR", "message": "Kode paket udah ada"}), 400
+
+        # Clean pipe/newline
+        nama = nama.replace('|', '/').replace(chr(10), ' ').replace(chr(13), ' ')
+        deskripsi = deskripsi.replace('|', '/').replace(chr(10), ' ').replace(chr(13), ' ')[:500]
+
+        # Tulis custom_paket.txt
+        with orders_lock:
+            with open(F_CUSTOM_PAKET, 'a') as f:
+                f.write(kode + "|" + nama + "|" + str(harga) + "|" + str(poin) + "|" + deskripsi + "|" + kategori + "|" + str(stok) + chr(10))
+
+        # Set stok awal
+        try:
+            stocks = read_stocks()
+            stocks[kode] = stok
+            with open(F_STOCKS, 'w') as f:
+                nt = int(time.time())
+                for c, s in stocks.items():
+                    f.write(c + "|" + str(s) + "|" + str(nt) + chr(10))
+        except Exception as e:
+            print("[API] create-paket stok error: " + str(e))
+
+        # Broadcast ke semua user
+        try:
+            import threading as _th
+            def _bc():
+                try:
+                    with open(F_USERS, "r") as f:
+                        users = [ln.strip() for ln in f if ln.strip() and not ln.startswith('-')]
+                    bc_text = (
+                        "\U0001F195 <b>PAKET BARU!</b> \U0001F195" + chr(10) + chr(10) +
+                        "\U0001F4E6 " + nama + chr(10) +
+                        "\U0001F4B0 Rp " + format(harga, ",").replace(",", ".") + chr(10) +
+                        "\U0001FA99 " + str(poin) + " Poin" + chr(10) + chr(10) +
+                        "\u26A1 Buruan checkout sebelum kehabisan!" + chr(10) +
+                        "\U0001F6D2 Bot: @Pakel_Mlbb_Store_bot"
+                    )
+                    for uid in set(users):
+                        try:
+                            send_message_to_telegram(uid, bc_text)
+                            time.sleep(0.05)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            _th.Thread(target=_bc, daemon=True).start()
+        except Exception:
+            pass
+
+        print("[API] Custom paket dibuat: " + kode + " (" + nama + ")")
+        return jsonify({"status": "OK", "kode": kode, "nama": nama, "harga": harga, "poin": poin, "stok": stok})
+    except Exception as e:
+        print("[API] create-paket error: " + str(e))
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/unblacklist-paket', methods=['POST'])
+def api_admin_unblacklist_paket():
+    """Balikin paket default yang udah di-blacklist."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        data = request.json or {}
+        kode = str(data.get('kode', '')).strip()
+        if not kode:
+            return jsonify({"status": "ERROR", "message": "Kode wajib"}), 400
+
+        bl = read_blacklist_api()
+        if kode not in bl:
+            return jsonify({"status": "ERROR", "message": "Paket tidak di-blacklist"}), 404
+        bl.discard(kode)
+
+        with open(F_BLACKLIST, "w") as f:
+            f.write(chr(10).join(sorted(bl)) + (chr(10) if bl else ""))
+
+        return jsonify({"status": "OK", "kode": kode})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+@app.route('/api/admin/blocked-users', methods=['GET'])
+def api_admin_blocked_users():
+    """List semua user yang di-block (dari banned.txt)."""
+    try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+
+        users = []
+        try:
+            if os.path.exists(F_BANNED):
+                with open(F_BANNED, "r") as f:
+                    users = [ln.strip() for ln in f if ln.strip()]
+        except Exception:
+            pass
+
+        return jsonify({"status": "OK", "users": users, "count": len(users)})
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
+
+
+# ============================================================
+# END BACKEND v8.0
+# ============================================================
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     print(f"[INFO] Pakel MlbbStore APK API v7 running on port {port}")
