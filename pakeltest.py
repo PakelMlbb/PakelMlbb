@@ -55,7 +55,7 @@ INFO_SAWERIA = "https://saweria.co/PakelMlbb"
 # =====================================================================================
 #  KONFIGURASI QRIS
 # =====================================================================================
-QRIS_IMAGE_URL = "https://i.ibb.co.com/JRXZvJkR/IMG-20260927-110643-128.jpg"
+QRIS_IMAGE_URL = "https://pakelmlbb.github.io/ml.hackvip/qris.jpg"
 
 WIB = timezone(timedelta(hours=7))
 
