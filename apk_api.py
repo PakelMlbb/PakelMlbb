@@ -51,6 +51,7 @@ F_INBOX = os.path.join(DATA_DIR, "inbox.txt")
 F_ERROR_LOG_API = os.path.join(DATA_DIR, "client_errors.txt")
 F_ADMIN_TOKEN = os.path.join(DATA_DIR, "admin_token.txt")
 F_ADMIN_BLOCK = os.path.join(DATA_DIR, "admin_block.txt")
+F_BANNED = os.path.join(DATA_DIR, "banned.txt")
 ADMIN_PWD_HASH = "16037969cfec40370e94a0c898de69f5ad348de642c69794875f89b8ad718136"
 ADMIN_CHAT_ID = "8772023108"
 ADMIN_TOKEN_EXPIRE = 604800  # 7 hari
@@ -583,6 +584,44 @@ def read_blacklist_api():
         print(f"[API] read_blacklist_api error: {e}")
     return bl
 
+
+
+def _get_all_paket_for_fake_api():
+    """Ambil semua paket (default + custom + override) buat fake testimoni."""
+    paket_list = []
+    try:
+        for kode, data in MASTER_PAKET.items():
+            try:
+                nama, harga, harga_str, poin, deskripsi = data
+                paket_list.append((nama, harga_str, str(poin) + " Poin"))
+            except Exception:
+                continue
+        try:
+            custom = read_custom_paket_api()
+            for kode, p in custom.items():
+                try:
+                    harga_str = "Rp " + format(p['harga'], ",").replace(",", ".")
+                    paket_list.append((p['nama'], harga_str, str(p['poin']) + " Poin"))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        try:
+            ov = read_paket_override_api()
+            for kode, vals in ov.items():
+                for i, item in enumerate(paket_list):
+                    nm = item[0]
+                    if kode in MASTER_PAKET and MASTER_PAKET[kode][0] == nm:
+                        new_hs = "Rp " + format(vals['harga'], ",").replace(",", ".")
+                        paket_list[i] = (nm, new_hs, str(vals['poin']) + " Poin")
+                        break
+        except Exception:
+            pass
+    except Exception as e:
+        print("[API] _get_all_paket_for_fake_api error: " + str(e))
+    return paket_list if paket_list else [
+        ("Sultan One Hit 100% (30 Hari)", "Rp 150.000", "55 Poin")
+    ]
 
 
 def read_paket_override_api():

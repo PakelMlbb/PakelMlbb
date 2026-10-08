@@ -108,7 +108,7 @@ F_REVIEWS = os.path.join(DATA_DIR, "reviews.txt")
 F_ORDERS = os.path.join(DATA_DIR, "orders.txt")
 F_ARCHIVE = os.path.join(DATA_DIR, "history_archive.txt")
 F_REFERRALS = os.path.join(DATA_DIR, "referrals.txt")
-F_PROOFS = os.path.join(DATA_DIR, "used_proofs.txt")
+F_USED_PROOFS = os.path.join(DATA_DIR, "used_proofs.txt")
 F_ADMINS = os.path.join(DATA_DIR, "admins.txt")
 F_ERRORLOG = os.path.join(DATA_DIR, "error.log")
 F_STOCKS = os.path.join(DATA_DIR, "stocks.txt")
@@ -271,7 +271,7 @@ def is_super_admin(chat_id):
 
 def is_proof_used(proof_unique_id):
     try:
-        with open(F_PROOFS, "r") as f:
+        with open(F_USED_PROOFS, "r") as f:
             used = {line.strip() for line in f if line.strip()}
         return proof_unique_id in used
     except FileNotFoundError:
@@ -843,7 +843,7 @@ def ai_cs_reply(chat_id, user_message, user_name="Kak"):
 
 def mark_proof_used(proof_unique_id):
     try:
-        with open(F_PROOFS, "a") as f:
+        with open(F_USED_PROOFS, "a") as f:
             f.write(f"{proof_unique_id}\n")
     except Exception as e:
         log_error("mark_proof_used", e)
