@@ -52,7 +52,7 @@ F_ERROR_LOG_API = os.path.join(DATA_DIR, "client_errors.txt")
 F_ADMIN_TOKEN = os.path.join(DATA_DIR, "admin_token.txt")
 F_ADMIN_BLOCK = os.path.join(DATA_DIR, "admin_block.txt")
 F_BANNED = os.path.join(DATA_DIR, "banned.txt")
-ADMIN_PWD_HASH = "16037969cfec40370e94a0c898de69f5ad348de642c69794875f89b8ad718136"
+ADMIN_PWD_HASH = os.environ.get("ADMIN_PWD_HASH", "16037969cfec40370e94a0c898de69f5ad348de642c69794875f89b8ad718136").strip()
 ADMIN_CHAT_ID = "8772023108"
 ADMIN_TOKEN_EXPIRE = 604800  # 7 hari
 F_SPAM_LOG = os.path.join(DATA_DIR, "spam_log.txt")
@@ -928,10 +928,12 @@ def get_paket():
 @app.route('/api/order', methods=['POST'])
 def create_order():
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         chat_id = str(data.get('chat_id', '')).strip()
         paket_kode = data.get('paket_kode')
-        payment_method = data.get('payment_method', 'TRANSFER')
+        payment_method = str(data.get('payment_method', 'TRANSFER')).strip().upper()
+        if payment_method not in {'TRANSFER', 'QRIS', 'POIN'}:
+            return jsonify({"status": "ERROR", "message": "Metode pembayaran tidak valid"}), 400
 
         if not chat_id or not chat_id.isdigit():
             return jsonify({"status": "ERROR", "message": "Chat ID tidak valid"}), 400
@@ -1213,7 +1215,7 @@ def cek_pending():
 @app.route('/api/cancel-order', methods=['POST'])
 def cancel_order():
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         chat_id = str(data.get('chat_id', '')).strip()
         resi = str(data.get('resi', '')).strip().upper()
         if not chat_id or not resi:
@@ -1286,7 +1288,7 @@ def api_referral():
 @app.route('/api/referral/register', methods=['POST'])
 def api_referral_register():
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         referrer_id = str(data.get('referrer_id', '')).strip()
         referred_id = str(data.get('referred_id', '')).strip()
         if not referrer_id or not referred_id:
@@ -1317,7 +1319,7 @@ def api_lucky_draw():
 @app.route('/api/lucky-draw/spin', methods=['POST'])
 def api_lucky_draw_spin():
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         chat_id = str(data.get('chat_id', '')).strip()
         if not chat_id or not chat_id.isdigit():
             return jsonify({"status": "ERROR", "message": "Chat ID tidak valid"}), 400
@@ -1362,7 +1364,7 @@ def api_lucky_draw_spin():
 @app.route('/api/redeem-voucher', methods=['POST'])
 def redeem_voucher():
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         chat_id = str(data.get('chat_id', '')).strip()
         kode = data.get('kode', '').strip().upper()
         if not chat_id or not kode:
@@ -1457,13 +1459,18 @@ def api_user_vouchers():
 def api_report_error():
     """Terima error report dari APK client."""
     try:
-        data = request.json or {}
-        err_type = str(data.get('type', 'unknown'))[:50]
-        err_msg = str(data.get('message', ''))[:500]
-        err_file = str(data.get('file', ''))[:200]
-        err_line = str(data.get('line', ''))[:20]
-        chat_id = str(data.get('chat_id', 'anon'))[:20]
-        ua = str(request.headers.get('User-Agent', ''))[:200]
+        data = request.get_json(silent=True) or {}
+        def _log_field(value, limit):
+            value = str(value if value is not None else "")
+            value = value.replace("\r", " ").replace("\n", " ").replace("|", "/")
+            return value[:limit]
+
+        err_type = _log_field(data.get('type', 'unknown'), 50)
+        err_msg = _log_field(data.get('message', ''), 500)
+        err_file = _log_field(data.get('file', ''), 200)
+        err_line = _log_field(data.get('line', ''), 20)
+        chat_id = _log_field(data.get('chat_id', 'anon'), 20)
+        ua = _log_field(request.headers.get('User-Agent', ''), 200)
         now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
         try:
             with open(F_ERROR_LOG_API, "a") as f:
@@ -1477,8 +1484,10 @@ def api_report_error():
 
 @app.route('/api/admin/recent-errors', methods=['GET'])
 def api_recent_errors():
-    """Ambil error log terbaru (buat admin)."""
+    """Ambil error log terbaru (khusus admin terautentikasi)."""
     try:
+        if not _admin_verify_token(request):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
         limit = int(request.args.get('limit', 20))
         if limit < 1: limit = 1
         if limit > 100: limit = 100
@@ -1495,7 +1504,7 @@ def api_recent_errors():
 def api_inbox_clear():
     """Hapus inbox user tertentu."""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         chat_id = str(data.get('chat_id', '')).strip()
         if not chat_id:
             return jsonify({"status": "ERROR", "message": "chat_id wajib"}), 400
@@ -1794,7 +1803,7 @@ def _admin_verify_token(req):
     if not token:
         return False
     active = _admin_load_token()
-    return active is not None and token == active
+    return active is not None and secrets.compare_digest(token, active)
 
 
 @app.route('/api/admin/login', methods=['POST'])
@@ -1805,7 +1814,7 @@ def api_admin_login():
         if block_left > 0:
             return jsonify({"status": "BLOCKED", "message": "Terlalu banyak percobaan. Coba lagi dalam " + str(block_left // 60) + " menit."}), 429
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         password = str(data.get('password', ''))
         chat_id = str(data.get('chat_id', '')).strip()
 
@@ -1815,7 +1824,7 @@ def api_admin_login():
 
         # Cek password
         pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-        if pwd_hash != ADMIN_PWD_HASH:
+        if not ADMIN_PWD_HASH or not secrets.compare_digest(pwd_hash, ADMIN_PWD_HASH):
             fails = _admin_record_fail()
             remaining = 3 - fails
             if remaining <= 0:
@@ -1875,7 +1884,7 @@ def api_admin_acc_order():
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         resi = str(data.get('resi', '')).strip().upper()
         if not resi:
             return jsonify({"status": "ERROR", "message": "Resi wajib"}), 400
@@ -1888,6 +1897,7 @@ def api_admin_acc_order():
             target_harga = ""
             target_payment = "TRANSFER"
             target_point_cost = 0
+            insufficient_points = None
             rows = []
             try:
                 with open(F_ORDERS, "r") as f:
@@ -1898,13 +1908,22 @@ def api_admin_acc_order():
                                 target_chat_id = parts[0]
                                 target_paket = parts[4]
                                 target_harga = parts[5]
-                                target_payment = parts[9] if len(parts) > 9 else "TRANSFER"
+                                target_payment = parts[9].strip().upper() if len(parts) > 9 else "TRANSFER"
                                 try:
                                     target_point_cost = int(parts[10]) if len(parts) > 10 and parts[10].isdigit() else 0
-                                except Exception:
+                                except (ValueError, TypeError):
                                     target_point_cost = 0
-                                parts[7] = "BERHASIL"
-                                updated = True
+                                # Validate points BEFORE changing status or triggering any side effects.
+                                if target_payment == "POIN" and target_point_cost > 0:
+                                    saldo_sekarang = read_points(target_chat_id)
+                                    if saldo_sekarang < target_point_cost:
+                                        insufficient_points = (saldo_sekarang, target_point_cost)
+                                    else:
+                                        parts[7] = "BERHASIL"
+                                        updated = True
+                                else:
+                                    parts[7] = "BERHASIL"
+                                    updated = True
                         rows.append('|'.join(parts) + "\n")
                 if updated:
                     with open(F_ORDERS, "w") as f:
@@ -1913,8 +1932,20 @@ def api_admin_acc_order():
                 print(f"[API] acc read error: {e}")
                 return jsonify({"status": "ERROR", "message": str(e)}), 500
 
+        if insufficient_points is not None:
+            saldo_sekarang, target_point_cost = insufficient_points
+            return jsonify({"status": "ERROR", "message": "Poin user tidak cukup! Saldo: " + str(saldo_sekarang) + " poin, butuh: " + str(target_point_cost) + " poin. Order tetap PENDING; tidak ada efek ACC yang dijalankan."}), 400
         if not updated:
             return jsonify({"status": "ERROR", "message": "Order tidak ditemukan atau sudah diproses"}), 404
+
+        # Deduct points immediately after status update and before other ACC side effects.
+        if target_payment == "POIN" and target_point_cost > 0:
+            new_balance = add_user_points(target_chat_id, -target_point_cost, "Tukar Paket via APK ACC")
+            if new_balance is None:
+                print("[API] WARNING: pengurangan poin gagal setelah status order diubah; perlu rekonsiliasi manual:", resi)
+            else:
+                print("[API] POIN " + str(target_point_cost) + " dipotong dari " + str(target_chat_id))
+
         try: _api_set_coupon_status(target_chat_id, "USED")
         except Exception: pass
         try: _api_write_testimoni_real(target_chat_id, target_paket, target_harga, target_payment)
@@ -1926,29 +1957,6 @@ def api_admin_acc_order():
             except Exception: pass
         try: _api_reduce_stock_by_name(target_paket, 1)
         except Exception: pass
-
-        # ===== FIX P2: Kalau POIN, cek saldo & potong sekarang =====
-        if target_payment == "POIN" and target_point_cost > 0:
-            saldo_sekarang = read_points(target_chat_id)
-            if saldo_sekarang < target_point_cost:
-                try:
-                    with orders_lock:
-                        with open(F_ORDERS, "r") as f:
-                            _lines_all = f.readlines()
-                        _new_lines = []
-                        for _ln in _lines_all:
-                            _pp = _ln.strip().split("|")
-                            if len(_pp) >= 8 and _pp[6].strip().upper() == resi:
-                                _pp[7] = "PENDING"
-                            _new_lines.append("|".join(_pp) + chr(10))
-                        with open(F_ORDERS, "w") as f:
-                            f.writelines(_new_lines)
-                except Exception:
-                    pass
-                return jsonify({"status": "ERROR", "message": "Poin user tidak cukup! Saldo: " + str(saldo_sekarang) + " poin, butuh: " + str(target_point_cost) + " poin. Order dibatalkan."}), 400
-            add_user_points(target_chat_id, -target_point_cost, "Tukar Paket via APK ACC")
-            print("[API] POIN " + str(target_point_cost) + " dipotong dari " + str(target_chat_id))
-
 
         # Kirim notif ke user via Telegram
         try:
@@ -1981,7 +1989,7 @@ def api_admin_reject_order():
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         resi = str(data.get('resi', '')).strip().upper()
         if not resi:
             return jsonify({"status": "ERROR", "message": "Resi wajib"}), 400
@@ -2087,7 +2095,7 @@ def api_admin_broadcast():
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
 
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         pesan = str(data.get('pesan', '')).strip()
         target = str(data.get('target', 'all')).strip()
         if not pesan:
@@ -2178,7 +2186,7 @@ def api_admin_flashsale_post():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         diskon = int(data.get('diskon', 0))
         durasi = int(data.get('durasi', 1))
         if diskon < 1 or diskon > 90:
@@ -2247,7 +2255,7 @@ def api_admin_voucher_post():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kode = str(data.get('kode', '')).strip().upper()
         diskon = int(data.get('diskon', 0))
         max_pakai = int(data.get('max_pakai', 1))
@@ -2312,7 +2320,7 @@ def api_admin_voucher_delete():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kode = str(data.get('kode', '')).strip().upper()
         if not kode:
             return jsonify({"status": "ERROR", "message": "Kode kosong"}), 400
@@ -2343,7 +2351,7 @@ def api_admin_restock():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kode = str(data.get('kode', '')).strip()
         jumlah = data.get('jumlah', None)
         # Baca stocks
@@ -2492,7 +2500,7 @@ def api_admin_edit_poin():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         uid = str(data.get('chat_id', '')).strip()
         poin = data.get('poin', None)
         if not uid:
@@ -2549,7 +2557,7 @@ def api_admin_block_user():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         uid = str(data.get('chat_id', '')).strip()
         action = str(data.get('action', 'block')).strip().lower()
         if not uid:
@@ -2616,7 +2624,7 @@ def api_admin_edit_paket():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kode = str(data.get('kode', '')).strip()
         field = str(data.get('field', '')).strip()
         value = data.get('value', None)
@@ -2658,7 +2666,7 @@ def api_admin_delete_paket():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kode = str(data.get('kode', '')).strip()
         if not kode:
             return jsonify({"status": "ERROR", "message": "Kode wajib"}), 400
@@ -2850,7 +2858,7 @@ def api_admin_create_paket():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kode = str(data.get('kode', '')).strip().lower()
         nama = str(data.get('nama', '')).strip()
         try:
@@ -2942,7 +2950,7 @@ def api_admin_unblacklist_paket():
     try:
         if not _admin_verify_token(request):
             return jsonify({"status": "UNAUTHORIZED"}), 401
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         kode = str(data.get('kode', '')).strip()
         if not kode:
             return jsonify({"status": "ERROR", "message": "Kode wajib"}), 400

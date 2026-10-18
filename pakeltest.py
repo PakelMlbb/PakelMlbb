@@ -26,7 +26,7 @@ if not TOKEN:
     print("[FATAL] TELEGRAM_TOKEN belum di-set di Railway Variables!")
     print("[INFO] Tambahkan TELEGRAM_TOKEN di Railway → Variables")
     exit(1)
-print(f"[INFO] Bot token loaded: {TOKEN[:15]}...")
+print("[INFO] Bot token loaded successfully.")
 bot = telebot.TeleBot(TOKEN)
 
 try:
