@@ -26,8 +26,8 @@ if not TOKEN:
     print("[FATAL] TELEGRAM_TOKEN belum di-set di Railway Variables!")
     print("[INFO] Tambahkan TELEGRAM_TOKEN di Railway → Variables")
     exit(1)
-print("[INFO] Bot token loaded successfully.")
-bot = telebot.TeleBot(TOKEN)
+print(f"[INFO] Bot token loaded (bot id: {TOKEN.split(':')[0]})")
+bot = telebot.TeleBot(TOKEN, num_threads=6)
 
 try:
     bot.remove_webhook()
@@ -156,14 +156,53 @@ last_photo_time = {}
 last_voucher_time = {}
 
 # FIX v11: Thread Locks untuk anti race-condition
-voucher_lock = threading.Lock()
-user_voucher_lock = threading.Lock()
-coupon_lock = threading.Lock()
-points_lock = threading.Lock()
-orders_lock = threading.Lock()
-stocks_lock = threading.Lock()
-referrals_lock = threading.Lock()
-users_lock = threading.Lock()
+# FIX: lock sekarang DIBAGI dengan apk_api.py (shared_locks.py). Dulu bot & API masing-masing punya
+# orders_lock/points_lock sendiri sehingga tidak saling mengunci (padahal satu proses & satu file).
+from shared_locks import (
+    orders_lock, points_lock, stocks_lock, referrals_lock, users_lock, user_voucher_lock,
+    vouchers_lock as voucher_lock, coupons_lock as coupon_lock,
+)
+import functools
+import html as _html
+
+
+def _locked(lock):
+    """Decorator: jalankan fungsi di dalam lock bersama."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **k):
+            with lock:
+                return fn(*a, **k)
+        return wrapper
+    return deco
+
+
+def _esc(s):
+    """Escape teks user (nama Telegram dll) sebelum masuk pesan parse_mode=HTML.
+    Nama seperti 'A<B' bikin Telegram menolak pesan (400 can't parse entities) -> notif admin hilang."""
+    return _html.escape(str(s if s is not None else ''), quote=False)
+
+
+def _rp(n):
+    """12345 -> '12.345' (format Indonesia). Dulu pakai format koma (:,) -> 'Rp 95,000' yang dibaca orang
+    Indonesia sebagai desimal (Rp 95)."""
+    try:
+        return format(int(n), ',').replace(',', '.')
+    except (ValueError, TypeError):
+        return str(n)
+
+
+def _write_lines_atomic(path, lines):
+    """Tulis ulang file secara atomik (tmp + os.replace)."""
+    tmp = path + ".tmp." + str(threading.get_ident())
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+    os.replace(tmp, path)
 
 # =====================================================================================
 #  MASTER KATALOG PAKET
@@ -219,14 +258,14 @@ MASTER_PAKET = {
 
 def log_error(context, e):
     try:
-        with open(F_ERRORLOG, "a") as f:
+        with open(F_ERRORLOG, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')} | {context} | {e}\n")
     except Exception:
         pass
 
 def is_banned(chat_id):
     try:
-        with open(F_BANNED, "r") as f:
+        with open(F_BANNED, "r", encoding="utf-8") as f:
             banned = {line.strip() for line in f if line.strip()}
         return str(chat_id) in banned
     except FileNotFoundError:
@@ -236,16 +275,16 @@ def ban_user(chat_id):
     try:
         if is_banned(chat_id):
             return
-        with open(F_BANNED, "a") as f:
+        with open(F_BANNED, "a", encoding="utf-8") as f:
             f.write(f"{chat_id}\n")
     except Exception as e:
         log_error("ban_user", e)
 
 def unban_user(chat_id):
     try:
-        with open(F_BANNED, "r") as f:
+        with open(F_BANNED, "r", encoding="utf-8") as f:
             rows = [line.strip() for line in f if line.strip() and line.strip() != str(chat_id)]
-        with open(F_BANNED, "w") as f:
+        with open(F_BANNED, "w", encoding="utf-8") as f:
             f.write("\n".join(rows) + ("\n" if rows else ""))
     except FileNotFoundError:
         pass
@@ -256,7 +295,7 @@ def get_admin_role(chat_id):
     if int(chat_id) == int(ADMIN_TELEGRAM_ID):
         return "super"
     try:
-        with open(F_ADMINS, "r") as f:
+        with open(F_ADMINS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) == 2 and parts[0] == str(chat_id):
@@ -273,7 +312,7 @@ def is_super_admin(chat_id):
 
 def is_proof_used(proof_unique_id):
     try:
-        with open(F_USED_PROOFS, "r") as f:
+        with open(F_USED_PROOFS, "r", encoding="utf-8") as f:
             used = {line.strip() for line in f if line.strip()}
         return proof_unique_id in used
     except FileNotFoundError:
@@ -284,7 +323,7 @@ def get_user_last_tier(chat_id):
     try:
         if not os.path.exists(F_LASTTIER):
             return None
-        with open(F_LASTTIER, "r") as f:
+        with open(F_LASTTIER, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) == 2 and parts[0] == str(chat_id):
@@ -299,7 +338,7 @@ def set_user_last_tier(chat_id, tier_label):
         updated = False
         chat_id_str = str(chat_id)
         if os.path.exists(F_LASTTIER):
-            with open(F_LASTTIER, "r") as f:
+            with open(F_LASTTIER, "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split('|')
                     if len(parts) == 2:
@@ -310,7 +349,7 @@ def set_user_last_tier(chat_id, tier_label):
                             rows.append(line.strip() + "\n")
         if not updated:
             rows.append(f"{chat_id_str}|{tier_label}\n")
-        with open(F_LASTTIER, "w") as f:
+        with open(F_LASTTIER, "w", encoding="utf-8") as f:
             f.writelines(rows)
     except Exception as e:
         log_error("set_user_last_tier", e)
@@ -346,7 +385,7 @@ def notify_admin_new_order(chat_id, user, paket, harga, resi, payment_method):
         now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S WIB')
         notif_text = (
             f"🛒 <b>ORDER BARU MASUK!</b>\n\n"
-            f"👤 User: @{user.username or user.first_name}\n"
+            f"👤 User: @{_esc(user.username or user.first_name)}\n"
             f"🆔 ID: <code>{chat_id}</code>\n"
             f"📦 Paket: <b>{paket}</b>\n"
             f"💵 Harga: <b>{harga}</b>\n"
@@ -406,7 +445,7 @@ def cleanup_old_logs():
         # 4. Hapus point_log lama (>90 hari)
         if os.path.exists(F_POINTLOG):
             try:
-                with open(F_POINTLOG, "r") as f:
+                with open(F_POINTLOG, "r", encoding="utf-8") as f:
                     lines = f.readlines()
                 new_lines = []
                 for line in lines:
@@ -422,7 +461,7 @@ def cleanup_old_logs():
                     else:
                         new_lines.append(line)
                 if len(new_lines) < len(lines):
-                    with open(F_POINTLOG, "w") as f:
+                    with open(F_POINTLOG, "w", encoding="utf-8") as f:
                         f.writelines(new_lines)
             except Exception:
                 pass
@@ -435,7 +474,7 @@ def get_active_flashsale():
     try:
         if not os.path.exists(F_FLASHSALE):
             return 0, 0
-        with open(F_FLASHSALE, "r") as f:
+        with open(F_FLASHSALE, "r", encoding="utf-8") as f:
             line = f.read().strip()
         if not line:
             return 0, 0
@@ -454,7 +493,7 @@ def get_active_flashsale():
 def set_flashsale(diskon, durasi_jam):
     try:
         expired_ts = int(time.time()) + (durasi_jam * 3600)
-        with open(F_FLASHSALE, "w") as f:
+        with open(F_FLASHSALE, "w", encoding="utf-8") as f:
             f.write(f"{diskon}|{expired_ts}")
     except Exception as e:
         log_error("set_flashsale", e)
@@ -468,7 +507,7 @@ def clear_flashsale():
 
 def broadcast_flashsale(diskon, durasi_jam):
     try:
-        with open(F_USERS, "r") as f:
+        with open(F_USERS, "r", encoding="utf-8") as f:
             users = [line.strip() for line in f.read().splitlines() if line.strip()]
     except FileNotFoundError:
         return
@@ -507,13 +546,13 @@ def notify_admin_new_user(chat_id, user):
         # Hitung total user
         total_users = 0
         try:
-            with open(F_USERS, "r") as f:
+            with open(F_USERS, "r", encoding="utf-8") as f:
                 total_users = len([ln for ln in f if ln.strip()])
         except FileNotFoundError:
             pass
 
         username_display = f"@{user.username}" if user.username else "(no username)"
-        nama = user.first_name + (f" {user.last_name}" if user.last_name else "")
+        nama = _esc(user.first_name + (f" {user.last_name}" if user.last_name else ""))
 
         bot.send_message(
             ADMIN_TELEGRAM_ID,
@@ -539,7 +578,7 @@ def notify_admin_order_will_expire():
         # Baca log remind
         reminded = set()
         if os.path.exists(reminded_file):
-            with open(reminded_file, "r") as f:
+            with open(reminded_file, "r", encoding="utf-8") as f:
                 reminded = {ln.strip() for ln in f if ln.strip()}
 
         new_reminded = []
@@ -562,7 +601,7 @@ def notify_admin_order_will_expire():
                     continue
                 try:
                     user_info = bot.get_chat(int(chat_id))
-                    nama = user_info.first_name
+                    nama = _esc(user_info.first_name)
                     username = f"@{user_info.username}" if user_info.username else "-"
                 except Exception:
                     nama = "User"
@@ -585,17 +624,17 @@ def notify_admin_order_will_expire():
 
         # Simpan log
         if new_reminded:
-            with open(reminded_file, "a") as f:
+            with open(reminded_file, "a", encoding="utf-8") as f:
                 for r in new_reminded:
                     f.write(f"{r}\n")
 
         # Cleanup log lama (kalau > 500 entri)
         try:
             if os.path.exists(reminded_file):
-                with open(reminded_file, "r") as f:
+                with open(reminded_file, "r", encoding="utf-8") as f:
                     lines = [ln.strip() for ln in f if ln.strip()]
                 if len(lines) > 500:
-                    with open(reminded_file, "w") as f:
+                    with open(reminded_file, "w", encoding="utf-8") as f:
                         f.write("\n".join(lines[-500:]) + "\n")
         except Exception:
             pass
@@ -614,7 +653,7 @@ def remind_expiring_user_vouchers():
         # Baca semua voucher aktif user
         user_vouchers = {}
         try:
-            with open(F_USER_VOUCHER, "r") as f:
+            with open(F_USER_VOUCHER, "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split('|')
                     if len(parts) >= 3 and parts[1].startswith("VOUCHER_"):
@@ -641,7 +680,7 @@ def remind_expiring_user_vouchers():
         # Baca log remind
         reminded = set()
         if os.path.exists(reminded_file):
-            with open(reminded_file, "r") as f:
+            with open(reminded_file, "r", encoding="utf-8") as f:
                 reminded = {ln.strip() for ln in f if ln.strip()}
 
         new_reminded = []
@@ -667,7 +706,7 @@ def remind_expiring_user_vouchers():
                                     chat_id,
                                     f"⏰ <b>VOUCHER KAMU HAMPIR EXPIRED!</b>\n\n"
                                     f"🎫 Kode: <code>{kode}</code>\n"
-                                    f"💵 Diskon: <b>Rp {diskon:,}</b>\n"
+                                    f"💵 Diskon: <b>Rp {_rp(diskon)}</b>\n"
                                     f"⏱️ Sisa Waktu: <b>{sisa_menit} menit lagi!</b>\n\n"
                                     f"⚡ Buruan checkout paket sebelum voucher hangus!\n"
                                     f"🛒 Langsung sikat ke /katalog ya Kak!",
@@ -679,7 +718,7 @@ def remind_expiring_user_vouchers():
 
         # Simpan log remind
         if new_reminded:
-            with open(reminded_file, "a") as f:
+            with open(reminded_file, "a", encoding="utf-8") as f:
                 for k in new_reminded:
                     f.write(f"{k}\n")
     except Exception as e:
@@ -724,7 +763,7 @@ def notify_admin_income_update():
             f"✅ Transaksi Sukses : <b>{sukses}</b>\n"
             f"⏳ Masih Pending    : <b>{pending}</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            f"💵 <b>Total Pendapatan</b> : <b>Rp {total_pendapatan:,}</b>\n"
+            f"💵 <b>Total Pendapatan</b> : <b>Rp {_rp(total_pendapatan)}</b>\n"
             f"🪙 Poin Ditukar     : <b>{poin_ditukar} Poin</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
             f"📌 <i>Cek detail: /stats</i>"
@@ -845,7 +884,7 @@ def ai_cs_reply(chat_id, user_message, user_name="Kak"):
 
 def mark_proof_used(proof_unique_id):
     try:
-        with open(F_USED_PROOFS, "a") as f:
+        with open(F_USED_PROOFS, "a", encoding="utf-8") as f:
             f.write(f"{proof_unique_id}\n")
     except Exception as e:
         log_error("mark_proof_used", e)
@@ -858,14 +897,14 @@ def mark_proof_used(proof_unique_id):
 def log_suspicious(chat_id, username, tipe, detail):
     try:
         now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
-        with open(F_SUSPICIOUS, "a") as f:
+        with open(F_SUSPICIOUS, "a", encoding="utf-8") as f:
             f.write(f"{now_str} | {chat_id} | @{username or '-'} | {tipe} | {detail}\n")
     except Exception:
         pass
     try:
         counters = {}
         if os.path.exists(F_SUSPICIOUS_COUNT):
-            with open(F_SUSPICIOUS_COUNT, "r") as f:
+            with open(F_SUSPICIOUS_COUNT, "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split('|')
                     if len(parts) == 2:
@@ -875,7 +914,7 @@ def log_suspicious(chat_id, username, tipe, detail):
                             pass
         cid = str(chat_id)
         counters[cid] = counters.get(cid, 0) + 1
-        with open(F_SUSPICIOUS_COUNT, "w") as f:
+        with open(F_SUSPICIOUS_COUNT, "w", encoding="utf-8") as f:
             for k, v in counters.items():
                 f.write(f"{k}|{v}\n")
         if counters[cid] >= MAX_SUSPICIOUS_BEFORE_BAN:
@@ -901,7 +940,7 @@ def reset_suspicious(chat_id):
     try:
         counters = {}
         if os.path.exists(F_SUSPICIOUS_COUNT):
-            with open(F_SUSPICIOUS_COUNT, "r") as f:
+            with open(F_SUSPICIOUS_COUNT, "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split('|')
                     if len(parts) == 2:
@@ -910,7 +949,7 @@ def reset_suspicious(chat_id):
                         except ValueError:
                             pass
         counters.pop(str(chat_id), None)
-        with open(F_SUSPICIOUS_COUNT, "w") as f:
+        with open(F_SUSPICIOUS_COUNT, "w", encoding="utf-8") as f:
             for k, v in counters.items():
                 f.write(f"{k}|{v}\n")
     except Exception as e:
@@ -939,7 +978,7 @@ def compute_checksum(filepath):
 def verify_checksums():
     critical_files = [F_ORDERS, F_POINTS, F_VOUCHERS, F_STOCKS]
     try:
-        with open(F_CHECKSUM, "w") as f:
+        with open(F_CHECKSUM, "w", encoding="utf-8") as f:
             for cf in critical_files:
                 f.write(f"{cf}|{compute_checksum(cf)}\n")
     except Exception as e:
@@ -1001,7 +1040,7 @@ def init_stock_if_empty():
     if os.path.exists(F_STOCKS):
         return
     try:
-        with open(F_STOCKS, "w") as f:
+        with open(F_STOCKS, "w", encoding="utf-8") as f:
             for code in MASTER_PAKET.keys():
                 harga = MASTER_PAKET[code][1]
                 if harga < 100000:
@@ -1025,7 +1064,7 @@ def _safe_lock(name):
         os.makedirs(DATA_DIR, exist_ok=True)
     except Exception:
         pass
-    fd = open(lock_path, "w")
+    fd = open(lock_path, "w", encoding="utf-8")
     try:
         fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
         yield
@@ -1046,7 +1085,7 @@ def _atomic_add_custom_paket(kode, data):
         custom = {}
         try:
             if os.path.exists(F_CUSTOM_PAKET):
-                with open(F_CUSTOM_PAKET, "r") as f:
+                with open(F_CUSTOM_PAKET, "r", encoding="utf-8") as f:
                     for line in f:
                         parts = line.strip().split("|")
                         if len(parts) >= 7:
@@ -1077,7 +1116,7 @@ def _atomic_add_custom_paket(kode, data):
                 _dk = p["deskripsi"].replace("\n", " ").replace("\r", " ").replace("|", "/")
                 rows.append(k + "|" + _nm + "|" + str(p["harga"]) + "|" + str(p["poin"]) + "|" + _dk + "|" + p["kategori"] + "|" + str(p["stok"]))
             tmp = F_CUSTOM_PAKET + ".tmp"
-            with open(tmp, "w") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 f.write("\n".join(rows) + ("\n" if rows else ""))
             os.replace(tmp, F_CUSTOM_PAKET)
             return True, "ok"
@@ -1092,7 +1131,7 @@ def _atomic_set_stock(kode, stok_baru):
         stocks = {}
         try:
             if os.path.exists(F_STOCKS):
-                with open(F_STOCKS, "r") as f:
+                with open(F_STOCKS, "r", encoding="utf-8") as f:
                     for line in f:
                         parts = line.strip().split("|")
                         if len(parts) >= 2:
@@ -1105,7 +1144,7 @@ def _atomic_set_stock(kode, stok_baru):
         stocks[kode] = max(0, int(stok_baru))
         try:
             tmp = F_STOCKS + ".tmp"
-            with open(tmp, "w") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 now_ts = int(time.time())
                 for code, stok in stocks.items():
                     f.write(code + "|" + str(stok) + "|" + str(now_ts) + "\n")
@@ -1119,7 +1158,7 @@ def _atomic_set_stock(kode, stok_baru):
 def _read_all_stocks():
     stocks = {}
     try:
-        with open(F_STOCKS, "r") as f:
+        with open(F_STOCKS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 2:
@@ -1134,7 +1173,7 @@ def _read_all_stocks():
 def _write_all_stocks(stocks):
     try:
         tmp = F_STOCKS + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             now_ts = int(time.time())
             for code, stok in stocks.items():
                 f.write(f"{code}|{stok}|{now_ts}\n")
@@ -1146,11 +1185,13 @@ def get_stock(paket_code):
     stocks = _read_all_stocks()
     return stocks.get(paket_code, 100)
 
+@_locked(stocks_lock)
 def set_stock(paket_code, angka_baru):
     stocks = _read_all_stocks()
     stocks[paket_code] = max(0, int(angka_baru))
     _write_all_stocks(stocks)
 
+@_locked(stocks_lock)
 def reduce_stock_specific(paket_code, jumlah=1):
     try:
         stocks = _read_all_stocks()
@@ -1160,6 +1201,7 @@ def reduce_stock_specific(paket_code, jumlah=1):
     except Exception as e:
         log_error("reduce_stock_specific", e)
 
+@_locked(stocks_lock)
 def reduce_stock_random_all():
     try:
         stocks = _read_all_stocks()
@@ -1173,6 +1215,7 @@ def reduce_stock_random_all():
     except Exception as e:
         log_error("reduce_stock_random_all", e)
 
+@_locked(stocks_lock)
 def auto_restock_if_low():
     try:
         stocks = _read_all_stocks()
@@ -1242,7 +1285,7 @@ def get_tier_progress(chat_id):
 def get_last_spin_time(chat_id):
     last_time = 0
     try:
-        with open(F_SPINLOG, "r") as f:
+        with open(F_SPINLOG, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 2 and parts[0] == str(chat_id):
@@ -1263,7 +1306,7 @@ def can_spin_now(chat_id):
 
 def save_spin(chat_id):
     try:
-        with open(F_SPINLOG, "a") as f:
+        with open(F_SPINLOG, "a", encoding="utf-8") as f:
             f.write(f"{chat_id}|{int(time.time())}\n")
     except Exception as e:
         log_error("save_spin", e)
@@ -1288,7 +1331,7 @@ def get_remaining_spin_time(chat_id):
 def _read_all_vouchers():
     vouchers = {}
     try:
-        with open(F_VOUCHERS, "r") as f:
+        with open(F_VOUCHERS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 4:
@@ -1309,7 +1352,7 @@ def _read_all_vouchers():
 def _write_all_vouchers(vouchers):
     try:
         tmp = F_VOUCHERS + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             for kode, data in vouchers.items():
                 f.write(f"{kode}|{data['diskon']}|{data['max']}|{data['terpakai']}|{data['expired']}\n")
         os.replace(tmp, F_VOUCHERS)
@@ -1368,7 +1411,7 @@ def user_has_voucher(chat_id, kode):
     try:
         if not os.path.exists(F_USER_VOUCHER):
             return False
-        with open(F_USER_VOUCHER, "r") as f:
+        with open(F_USER_VOUCHER, "r", encoding="utf-8") as f:
             for ln in f:
                 parts = ln.strip().split('|')
                 if len(parts) >= 3 and parts[0] == str(chat_id):
@@ -1385,7 +1428,7 @@ def save_user_voucher(chat_id, kode, diskon):
         kode_up = kode.upper().strip()
         rows = []
         if os.path.exists(F_USER_VOUCHER):
-            with open(F_USER_VOUCHER, "r") as f:
+            with open(F_USER_VOUCHER, "r", encoding="utf-8") as f:
                 rows = [ln.strip() for ln in f if ln.strip()]
         # FIX v11: Cek duplikat - kalau voucher ini udah pernah di-redeem user, jangan simpan lagi
         for ln in rows:
@@ -1395,7 +1438,7 @@ def save_user_voucher(chat_id, kode, diskon):
                     return
         # FIX v11: Simpan voucher baru (JANGAN hapus voucher lama)
         rows.append(f"{chat_id}|VOUCHER_{kode_up}|{diskon}|{int(time.time())}")
-        with open(F_USER_VOUCHER, "w") as f:
+        with open(F_USER_VOUCHER, "w", encoding="utf-8") as f:
             f.write("\n".join(rows) + "\n")
     except Exception as e:
         log_error("save_user_voucher", e)
@@ -1404,7 +1447,7 @@ def get_user_voucher_diskon(chat_id):
     try:
         if not os.path.exists(F_USER_VOUCHER):
             return None, 0
-        with open(F_USER_VOUCHER, "r") as f:
+        with open(F_USER_VOUCHER, "r", encoding="utf-8") as f:
             for ln in f:
                 parts = ln.strip().split('|')
                 if len(parts) >= 3 and parts[0] == str(chat_id):
@@ -1422,7 +1465,7 @@ def consume_user_voucher(chat_id):
     try:
         if not os.path.exists(F_USER_VOUCHER):
             return
-        with open(F_USER_VOUCHER, "r") as f:
+        with open(F_USER_VOUCHER, "r", encoding="utf-8") as f:
             rows = [ln.strip() for ln in f if ln.strip()]
         new_rows = []
         consumed = False
@@ -1432,7 +1475,7 @@ def consume_user_voucher(chat_id):
                 consumed = True
                 continue
             new_rows.append(ln)
-        with open(F_USER_VOUCHER, "w") as f:
+        with open(F_USER_VOUCHER, "w", encoding="utf-8") as f:
             f.write("\n".join(new_rows) + ("\n" if new_rows else ""))
     except Exception as e:
         log_error("consume_user_voucher", e)
@@ -1441,7 +1484,7 @@ def get_user_lucky_diskon(chat_id):
     try:
         if not os.path.exists(F_USER_VOUCHER):
             return 0
-        with open(F_USER_VOUCHER, "r") as f:
+        with open(F_USER_VOUCHER, "r", encoding="utf-8") as f:
             for ln in f:
                 parts = ln.strip().split('|')
                 if len(parts) >= 2 and parts[0] == str(chat_id):
@@ -1458,7 +1501,7 @@ def consume_user_lucky_diskon(chat_id):
     try:
         if not os.path.exists(F_USER_VOUCHER):
             return
-        with open(F_USER_VOUCHER, "r") as f:
+        with open(F_USER_VOUCHER, "r", encoding="utf-8") as f:
             rows = [ln.strip() for ln in f if ln.strip()]
         new_rows = []
         consumed = False
@@ -1468,7 +1511,7 @@ def consume_user_lucky_diskon(chat_id):
                 consumed = True
                 continue
             new_rows.append(ln)
-        with open(F_USER_VOUCHER, "w") as f:
+        with open(F_USER_VOUCHER, "w", encoding="utf-8") as f:
             f.write("\n".join(new_rows) + ("\n" if new_rows else ""))
     except Exception as e:
         log_error("consume_user_lucky_diskon", e)
@@ -1484,12 +1527,12 @@ def save_user(chat_id):
             return
         users = []
         try:
-            with open(F_USERS, "r") as f:
+            with open(F_USERS, "r", encoding="utf-8") as f:
                 users = [line.strip() for line in f if line.strip()]
         except FileNotFoundError:
             pass
         if chat_id_str not in users:
-            with open(F_USERS, "a") as f:
+            with open(F_USERS, "a", encoding="utf-8") as f:
                 f.write(chat_id_str + "\n")
             # FIX v13: Notif user baru join (di thread biar ga blocking)
             try:
@@ -1504,13 +1547,13 @@ def save_user(chat_id):
         try:
             last_seen = {}
             if os.path.exists(F_LASTSEEN):
-                with open(F_LASTSEEN, "r") as f:
+                with open(F_LASTSEEN, "r", encoding="utf-8") as f:
                     for line in f:
                         p = line.strip().split('|')
                         if len(p) == 2:
                             last_seen[p[0]] = p[1]
             last_seen[chat_id_str] = str(int(time.time()))
-            with open(F_LASTSEEN, "w") as f:
+            with open(F_LASTSEEN, "w", encoding="utf-8") as f:
                 for uid, ts in last_seen.items():
                     f.write(f"{uid}|{ts}\n")
         except Exception:
@@ -1523,7 +1566,7 @@ def get_user_coupon_status(chat_id):
     try:
         if not os.path.exists(F_COUPONS):
             return "AVAILABLE"
-        with open(F_COUPONS, "r") as f:
+        with open(F_COUPONS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) == 2 and parts[0] == str(chat_id):
@@ -1538,7 +1581,7 @@ def set_user_coupon_status(chat_id, status_baru):
         rows = []
         updated = False
         if os.path.exists(F_COUPONS):
-            with open(F_COUPONS, "r") as f:
+            with open(F_COUPONS, "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split('|')
                     if len(parts) == 2:
@@ -1551,7 +1594,7 @@ def set_user_coupon_status(chat_id, status_baru):
             rows.append(f"{chat_id_str}|{status_baru}\n")
         # FIX v11: Atomic write (anti reset promo)
         tmp = F_COUPONS + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             f.writelines(rows)
         if os.path.exists(F_COUPONS):
             os.remove(F_COUPONS)
@@ -1561,7 +1604,7 @@ def set_user_coupon_status(chat_id, status_baru):
 
 def get_user_points(chat_id):
     try:
-        with open(F_POINTS, "r") as f:
+        with open(F_POINTS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) == 2 and parts[0] == str(chat_id):
@@ -1573,7 +1616,7 @@ def get_user_points(chat_id):
 def _write_point_log(chat_id, delta, alasan):
     try:
         now = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
-        with open(F_POINTLOG, "a") as f:
+        with open(F_POINTLOG, "a", encoding="utf-8") as f:
             f.write(f"{chat_id}|{now}|{delta}|{alasan}\n")
     except Exception as e:
         log_error("_write_point_log", e)
@@ -1586,7 +1629,7 @@ def set_user_points(chat_id, poin_baru, alasan="Edit manual admin"):
             rows = []
             updated = False
             try:
-                with open(F_POINTS, "r") as f:
+                with open(F_POINTS, "r", encoding="utf-8") as f:
                     for line in f:
                         parts = line.strip().split('|')
                         if len(parts) == 2:
@@ -1599,11 +1642,11 @@ def set_user_points(chat_id, poin_baru, alasan="Edit manual admin"):
                 pass
             if not updated:
                 rows.append(f"{chat_id_str}|{int(poin_baru)}\n")
-            with open(F_POINTS, "w") as f:
+            with open(F_POINTS, "w", encoding="utf-8") as f:
                 f.writelines(rows)
             try:
                 now = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
-                with open(F_POINTLOG, "a") as f:
+                with open(F_POINTLOG, "a", encoding="utf-8") as f:
                     f.write(f"{chat_id}|{now}|SET={poin_baru}|{alasan}\n")
             except Exception:
                 pass
@@ -1622,7 +1665,7 @@ def add_user_points(chat_id, amount, alasan="Bonus/Penambahan"):
             updated = False
             chat_id_str = str(chat_id)
             try:
-                with open(F_POINTS, "r") as f:
+                with open(F_POINTS, "r", encoding="utf-8") as f:
                     for line in f:
                         parts = line.strip().split('|')
                         if len(parts) == 2:
@@ -1635,19 +1678,20 @@ def add_user_points(chat_id, amount, alasan="Bonus/Penambahan"):
                 pass
             if not updated:
                 rows.append(f"{chat_id_str}|{new_total}\n")
-            with open(F_POINTS, "w") as f:
+            with open(F_POINTS, "w", encoding="utf-8") as f:
                 f.writelines(rows)
             _write_point_log(chat_id, f"+{amount}", alasan)
         except Exception as e:
             log_error("add_user_points", e)
 
+@_locked(points_lock)
 def reduce_user_points(chat_id, amount, alasan="Penukaran/Pengurangan"):
     current = get_user_points(chat_id)
     new_total = max(0, current - amount)
     rows = []
     chat_id_str = str(chat_id)
     try:
-        with open(F_POINTS, "r") as f:
+        with open(F_POINTS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) == 2:
@@ -1657,7 +1701,7 @@ def reduce_user_points(chat_id, amount, alasan="Penukaran/Pengurangan"):
                     rows.append(f"{c_id}|{pts}\n")
     except FileNotFoundError:
         pass
-    with open(F_POINTS, "w") as f:
+    with open(F_POINTS, "w", encoding="utf-8") as f:
         f.writelines(rows)
     _write_point_log(chat_id, f"-{amount}", alasan)
 
@@ -1665,7 +1709,7 @@ def save_user_review(chat_id, rating, text_review):
     try:
         now = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
         review_line = f"{chat_id}|{now}|{rating}|{text_review.replace('|', '-')}\n"
-        with open(F_REVIEWS, "a") as f:
+        with open(F_REVIEWS, "a", encoding="utf-8") as f:
             f.write(review_line)
     except Exception as e:
         log_error("save_user_review", e)
@@ -1681,7 +1725,7 @@ def save_order(chat_id, paket_nama, harga, resi, payment_method="TRANSFER", poin
         hari_str = days_indo.get(now.strftime('%a'), now.strftime('%a'))
         order_line = (f"{chat_id}|{tanggal_str}|{hari_str}|{jam_str}|{paket_nama}|{harga}|"
                       f"{resi}|PENDING|{timestamp_epoch}|{payment_method}|{point_cost}|{admin_msg_id}\n")
-        with open(F_ORDERS, "a") as f:
+        with open(F_ORDERS, "a", encoding="utf-8") as f:
             f.write(order_line)
     except Exception as e:
         log_error("save_order", e)
@@ -1689,7 +1733,7 @@ def save_order(chat_id, paket_nama, harga, resi, payment_method="TRANSFER", poin
 def _read_all_orders():
     rows = []
     try:
-        with open(F_ORDERS, "r") as f:
+        with open(F_ORDERS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 8:
@@ -1731,8 +1775,7 @@ def update_order_status_by_resi(resi_target, status_baru):
                             f"{timestamp_epoch}|{pay_method}|{p_cost}|{adm_msg_id}\n")
 
             if updated:
-                with open(F_ORDERS, "w") as f:
-                    f.writelines(rows)
+                _write_lines_atomic(F_ORDERS, rows)
                 if target_chat_id and current_status_db == "PENDING":
                     if status_baru == "BERHASIL":
                         set_user_coupon_status(target_chat_id, "USED")
@@ -1804,6 +1847,13 @@ def get_latest_user_order_data(chat_id):
     return f"PKL-MLBB-{random.randint(10000, 99999)}", "PENDING"
 
 def archive_old_orders():
+    """FIX: dulu tulis ulang orders.txt TANPA lock -> order baru yang masuk (dari API/bot) saat arsip
+    berjalan bisa HILANG. Sekarang di dalam orders_lock + tulis atomik."""
+    with orders_lock:
+        _archive_old_orders_unlocked()
+
+
+def _archive_old_orders_unlocked():
     try:
         now_epoch = int(datetime.now(WIB).timestamp())
         keep_rows, archive_rows = [], []
@@ -1815,10 +1865,9 @@ def archive_old_orders():
             else:
                 keep_rows.append(line)
         if archive_rows:
-            with open(F_ARCHIVE, "a") as f:
+            with open(F_ARCHIVE, "a", encoding="utf-8") as f:
                 f.writelines(archive_rows)
-            with open(F_ORDERS, "w") as f:
-                f.writelines(keep_rows)
+            _write_lines_atomic(F_ORDERS, keep_rows)
     except Exception as e:
         log_error("archive_old_orders", e)
 
@@ -1838,7 +1887,7 @@ def register_referral(referrer_id, referred_id):
     if referrer_id == referred_id:
         return False
     try:
-        with open(F_REFERRALS, "r") as f:
+        with open(F_REFERRALS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 2 and parts[1] == referred_id:
@@ -1847,7 +1896,7 @@ def register_referral(referrer_id, referred_id):
         pass
     try:
         now = int(datetime.now(WIB).timestamp())
-        with open(F_REFERRALS, "a") as f:
+        with open(F_REFERRALS, "a", encoding="utf-8") as f:
             f.write(f"{referrer_id}|{referred_id}|{now}|BELUM_BONUS\n")
         return True
     except Exception as e:
@@ -1864,7 +1913,7 @@ def _apply_referral_bonus_if_eligible_helper(new_buyer_chat_id):
             rows = []
             changed = False
             referrer_to_bonus = None
-            with open(F_REFERRALS, "r") as f:
+            with open(F_REFERRALS, "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split('|')
                     if len(parts) == 4:
@@ -1876,7 +1925,7 @@ def _apply_referral_bonus_if_eligible_helper(new_buyer_chat_id):
                         rows.append(f"{referrer_id}|{referred_id}|{ts}|{status}\n")
             if changed:
                 tmp = F_REFERRALS + ".tmp"
-                with open(tmp, "w") as f:
+                with open(tmp, "w", encoding="utf-8") as f:
                     f.writelines(rows)
                 os.replace(tmp, F_REFERRALS)
             if referrer_to_bonus:
@@ -1901,7 +1950,7 @@ def _apply_referral_bonus_if_eligible_helper(new_buyer_chat_id):
 def get_referral_stats(chat_id):
     total, bonus_cair = 0, 0
     try:
-        with open(F_REFERRALS, "r") as f:
+        with open(F_REFERRALS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) == 4 and parts[0] == str(chat_id):
@@ -2047,13 +2096,13 @@ def _write_testimoni_grup(text, nama=None, paket=None, harga=None):
                     harga = "Rp 150.000"
             ts = int(time.time())
             line = str(ts) + "|" + str(nm) + "|" + str(paket) + "|" + str(harga) + chr(10)
-            with open(F_TESTIMONI_GRUP, "a") as f:
+            with open(F_TESTIMONI_GRUP, "a", encoding="utf-8") as f:
                 f.write(line)
             try:
-                with open(F_TESTIMONI_GRUP, "r") as f:
+                with open(F_TESTIMONI_GRUP, "r", encoding="utf-8") as f:
                     all_l = f.readlines()
                 if len(all_l) > 500:
-                    with open(F_TESTIMONI_GRUP, "w") as f:
+                    with open(F_TESTIMONI_GRUP, "w", encoding="utf-8") as f:
                         f.writelines(all_l[-300:])
             except Exception:
                 pass
@@ -2109,7 +2158,7 @@ def generate_fake_testimonials_list():
 def broadcast_voucher_baru(kode, diskon, max_pakai, durasi_jam):
     """Kirim BC voucher baru ke semua user (dipanggil dari thread)."""
     try:
-        with open(F_USERS, "r") as f:
+        with open(F_USERS, "r", encoding="utf-8") as f:
             users = [line.strip() for line in f.read().splitlines() if line.strip()]
     except FileNotFoundError:
         return
@@ -2117,7 +2166,7 @@ def broadcast_voucher_baru(kode, diskon, max_pakai, durasi_jam):
     bc_text = (
         "🎫 <b>VOUCHER BARU DARI PAKEL MLBBSTORE!</b> 🎫\n\n"
         f"🎁 Kode Voucher: <code>{kode}</code>\n"
-        f"💵 Diskon: <b>Rp {diskon:,}</b>\n"
+        f"💵 Diskon: <b>Rp {_rp(diskon)}</b>\n"
         f"📊 Kuota Terbatas: <b>{max_pakai} user</b>\n"
         f"⏱️ Berlaku: <b>{durasi_jam} jam</b>\n\n"
         "📌 <b>CARA PAKAI:</b>\n"
@@ -2182,7 +2231,7 @@ def payment_reminder_loop():
                                     "sebelum pesanan otomatis expired ya! 🙏",
                                     parse_mode="HTML"
                                 )
-                                open(marker_file, "w").close()
+                                open(marker_file, "w", encoding="utf-8").close()
                             except Exception as e:
                                 log_error("payment_reminder_send", e)
         except Exception as e:
@@ -2253,7 +2302,7 @@ def background_auto_broadcast():
         try:
             time.sleep(random.randint(14400, 28800))
             try:
-                with open(F_USERS, "r") as f:
+                with open(F_USERS, "r", encoding="utf-8") as f:
                     users = [line.strip() for line in f.read().splitlines() if line.strip()]
             except FileNotFoundError:
                 continue
@@ -2685,7 +2734,7 @@ def cmd_reset_orders(message):
         bot.reply_to(message, "⚠️ Perintah khusus admin utama!")
         return
     try:
-        open(F_ORDERS, "w").close()
+        open(F_ORDERS, "w", encoding="utf-8").close()
         bot.reply_to(message, "✅ Berhasil dikosongkan.")
     except Exception as e:
         bot.reply_to(message, f"Gagal: {e}")
@@ -2735,7 +2784,7 @@ def cmd_laporan(message):
             f"⌛ Expired          : <b>{expired}</b>\n"
             f"⏳ Masih Pending    : <b>{pending}</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 <b>Total Pendapatan</b>: Rp {total_pendapatan:,}\n"
+            f"💰 <b>Total Pendapatan</b>: Rp {_rp(total_pendapatan)}\n"
             f"🪙 Poin Ditukar     : {poin_ditukar} Poin\n"
             f"👥 User Order Hari Ini: <b>{len(user_order_hari_ini)}</b>\n"
             "━━━━━━━━━━━━━━━━━━━"
@@ -2819,7 +2868,7 @@ def cmd_stats(message):
         # 1. Data user
         total_users = 0
         try:
-            with open(F_USERS, "r") as f:
+            with open(F_USERS, "r", encoding="utf-8") as f:
                 total_users = len([ln for ln in f if ln.strip()])
         except FileNotFoundError:
             pass
@@ -2871,7 +2920,7 @@ def cmd_stats(message):
         # 4. Total poin beredar
         total_poin = 0
         try:
-            with open(F_POINTS, "r") as f:
+            with open(F_POINTS, "r", encoding="utf-8") as f:
                 for line in f:
                     parts_p = line.strip().split('|')
                     if len(parts_p) == 2 and parts_p[1].isdigit():
@@ -2910,8 +2959,8 @@ def cmd_stats(message):
             f"   ❌ Ditolak          : <b>{ditolak}</b>\n"
             f"   ⌛ Expired          : <b>{expired}</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 <b>Pendapatan Hari Ini</b> : <b>Rp {total_pendapatan:,}</b>\n"
-            f"🪙 <b>Total Poin Beredar</b>  : <b>{total_poin:,} Poin</b>\n"
+            f"💰 <b>Pendapatan Hari Ini</b> : <b>Rp {_rp(total_pendapatan)}</b>\n"
+            f"🪙 <b>Total Poin Beredar</b>  : <b>{_rp(total_poin)} Poin</b>\n"
             f"🎫 <b>Voucher Aktif</b>        : <b>{total_voucher_aktif}</b>\n"
             f"⚡ <b>Flash Sale</b>           : {fs_info}\n"
             "━━━━━━━━━━━━━━━━━━━\n"
@@ -2999,7 +3048,7 @@ def cmd_leaderboard(message):
             text += (
                 f"{rank_icon} {masked}{marker}\n"
                 f"   📦 {stat['total_order']}x transaksi\n"
-                f"   💰 Rp {stat['total_belanja']:,}\n\n"
+                f"   💰 Rp {_rp(stat['total_belanja'])}\n\n"
             )
 
         # Cek rank user ini
@@ -3016,7 +3065,7 @@ def cmd_leaderboard(message):
             text += (
                 f"📊 <b>Posisi Kamu:</b> #{my_rank}\n"
                 f"   • Total Order: {my_stat['total_order']}x\n"
-                f"   • Total Belanja: Rp {my_stat['total_belanja']:,}\n\n"
+                f"   • Total Belanja: Rp {_rp(my_stat['total_belanja'])}\n\n"
             )
         else:
             text += "💡 <i>Kamu belum pernah order. Yuk mulai sekarang biar masuk leaderboard!</i>\n\n"
@@ -3100,7 +3149,7 @@ def cmd_voucher_user(message):
             f"Halo Kak {nama_user}!\n\n"
             f"Kamu dapet voucher eksklusif dari admin:\n\n"
             f"🎫 Kode: <code>{kode}</code>\n"
-            f"💵 Diskon: <b>Rp {diskon:,}</b>\n"
+            f"💵 Diskon: <b>Rp {_rp(diskon)}</b>\n"
             f"⏱️ Berlaku: <b>{durasi_jam} jam</b>\n\n"
             f"💡 Voucher udah otomatis aktif di akunmu!\n"
             f"🛒 Tinggal checkout paket & diskon kepakai otomatis.\n\n"
@@ -3115,7 +3164,7 @@ def cmd_voucher_user(message):
                  f"✅ <b>VOUCHER PERSONAL DIBUAT!</b>\n\n"
                  f"👤 Target: {target_info.first_name} (<code>{target_chat_id}</code>)\n"
                  f"🎫 Kode: <code>{kode}</code>\n"
-                 f"💵 Diskon: Rp {diskon:,}\n"
+                 f"💵 Diskon: Rp {_rp(diskon)}\n"
                  f"⏱️ Durasi: {durasi_jam} jam\n"
                  f"📌 Max Pakai: 1x (cuma buat user ini)\n\n"
                  f"📤 Status DM: {status}",
@@ -3202,7 +3251,7 @@ def cmd_buatvoucher(message):
     bot.reply_to(message,
                  f"✅ Voucher dibuat!\n\n"
                  f"🎫 Kode: <code>{kode}</code>\n"
-                 f"💵 Diskon: Rp {diskon:,}\n"
+                 f"💵 Diskon: Rp {_rp(diskon)}\n"
                  f"📊 Max Pakai: {max_pakai} kali\n"
                  f"⏱️ Expired: {durasi_jam} jam\n\n"
                  f"📢 Sedang broadcast ke semua user...",
@@ -3228,7 +3277,7 @@ def cmd_listvoucher(message):
         sisa = v['max'] - v['terpakai']
         exp = datetime.fromtimestamp(v['expired'], WIB).strftime('%d-%m-%Y %H:%M') if v['expired'] > 0 else "-"
         text += (f"• <code>{kode}</code>\n"
-                 f"  Diskon: Rp {v['diskon']:,}\n"
+                 f"  Diskon: Rp {_rp(v['diskon'])}\n"
                  f"  Sisa: {sisa}/{v['max']}\n"
                  f"  Expired: {exp}\n\n")
     bot.reply_to(message, text, parse_mode="HTML")
@@ -3255,7 +3304,7 @@ def cmd_hapusvoucher(message):
         bot.reply_to(message,
                      f"✅ <b>Voucher berhasil dihapus!</b>\n\n"
                      f"🎫 Kode: <code>{kode}</code>\n"
-                     f"💵 Diskon: Rp {v['diskon']:,}\n"
+                     f"💵 Diskon: Rp {_rp(v['diskon'])}\n"
                      f"📊 Sisa Kuota Sebelum Hapus: {sisa}/{v['max']}\n"
                      f"⚠️ <i>Voucher yang sudah di-redeem user tetap bisa dipakai (tersimpan di akun user masing-masing).</i>",
                      parse_mode="HTML")
@@ -3329,7 +3378,7 @@ def cmd_cek_voucher_user(message):
             bot.reply_to(message, "File user_voucher.txt belum ada.")
             return
         rows = []
-        with open(F_USER_VOUCHER, "r") as f:
+        with open(F_USER_VOUCHER, "r", encoding="utf-8") as f:
             for ln in f:
                 parts = ln.strip().split('|')
                 if len(parts) >= 3 and parts[0] == target_id:
@@ -3342,7 +3391,7 @@ def cmd_cek_voucher_user(message):
             tag = p[1]
             if tag.startswith("VOUCHER_"):
                 kode = tag.replace("VOUCHER_", "")
-                text += f"• Voucher: <code>{kode}</code>\n  Diskon: Rp {int(p[2]):,}\n\n"
+                text += f"• Voucher: <code>{kode}</code>\n  Diskon: Rp {_rp(int(p[2]))}\n\n"
             elif tag.startswith("DISKON"):
                 text += f"• Lucky Draw Diskon: {tag.replace('DISKON', '')}%\n\n"
         bot.reply_to(message, text, parse_mode="HTML")
@@ -3356,7 +3405,7 @@ def cmd_cek_suspicious(message):
     if not os.path.exists(F_SUSPICIOUS):
         bot.reply_to(message, "✅ Belum ada aktivitas mencurigakan.")
         return
-    with open(F_SUSPICIOUS, "r") as f:
+    with open(F_SUSPICIOUS, "r", encoding="utf-8") as f:
         lines = [ln for ln in f.read().strip().split("\n") if ln]
     if not lines:
         bot.reply_to(message, "✅ Kosong.")
@@ -3526,7 +3575,7 @@ def admin_add_points(message):
         return
     target_chat_id = None
     try:
-        with open(F_USERS, "r") as f:
+        with open(F_USERS, "r", encoding="utf-8") as f:
             for line in f:
                 uid = line.strip()
                 if uid and not uid.startswith('-'):
@@ -3566,7 +3615,7 @@ def broadcast_message(message):
         bot.reply_to(message, "⚠️ Format: /bc pesan...")
         return
     try:
-        with open(F_USERS, "r") as f:
+        with open(F_USERS, "r", encoding="utf-8") as f:
             users = [line.strip() for line in f.read().splitlines() if line.strip()]
     except FileNotFoundError:
         bot.reply_to(message, "Belum ada user.")
@@ -3595,7 +3644,7 @@ def broadcast_buyers_only(message):
         return
     buyer_ids = set()
     try:
-        with open(F_ORDERS, "r") as f:
+        with open(F_ORDERS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 8 and parts[7].strip() == "BERHASIL":
@@ -3861,7 +3910,7 @@ def _spam_guard(chat_id):
             with _safe_lock("blocked"):
                 existing = {}
                 if os.path.exists(F_BLOCKED):
-                    with open(F_BLOCKED, "r") as f:
+                    with open(F_BLOCKED, "r", encoding="utf-8") as f:
                         for ln in f:
                             p = ln.strip().split('|')
                             if len(p) == 2:
@@ -3870,13 +3919,13 @@ def _spam_guard(chat_id):
                                 except ValueError:
                                     pass
                 existing[cid] = int(now + _BLOCK_DURATION)
-                with open(F_BLOCKED, "w") as f:
+                with open(F_BLOCKED, "w", encoding="utf-8") as f:
                     for k, v in existing.items():
                         f.write(k + "|" + str(v) + "\n")
         except Exception as e:
             log_error("_spam_guard_block", e)
         try:
-            with open(F_SPAM_LOG, "a") as f:
+            with open(F_SPAM_LOG, "a", encoding="utf-8") as f:
                 now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
                 f.write(now_str + " | " + cid + " | " + str(len(arr)) + " msgs in " + str(_SPAM_WINDOW) + "s\n")
         except Exception:
@@ -3898,7 +3947,7 @@ def _is_blocked_temp(chat_id):
             return False
         cid = str(chat_id)
         now = time.time()
-        with open(F_BLOCKED, "r") as f:
+        with open(F_BLOCKED, "r", encoding="utf-8") as f:
             for ln in f:
                 p = ln.strip().split('|')
                 if len(p) == 2 and p[0] == cid:
@@ -3920,7 +3969,7 @@ def _cleanup_blocked():
         now = time.time()
         with _safe_lock("blocked"):
             kept = []
-            with open(F_BLOCKED, "r") as f:
+            with open(F_BLOCKED, "r", encoding="utf-8") as f:
                 for ln in f:
                     p = ln.strip().split('|')
                     if len(p) == 2:
@@ -3929,7 +3978,7 @@ def _cleanup_blocked():
                                 kept.append(ln.strip() + "\n")
                         except ValueError:
                             pass
-            with open(F_BLOCKED, "w") as f:
+            with open(F_BLOCKED, "w", encoding="utf-8") as f:
                 f.writelines(kept)
     except Exception as e:
         log_error("_cleanup_blocked", e)
@@ -3976,14 +4025,14 @@ def _write_inbox(chat_id, tipe, title, body):
             if len(title_clean) > 80: title_clean = title_clean[:77] + "..."
             if len(body_clean) > 300: body_clean = body_clean[:297] + "..."
             line = str(chat_id) + "|" + str(tipe) + "|" + title_clean + "|" + body_clean + "|" + str(int(time.time())) + "\n"
-            with open(F_INBOX, "a") as f:
+            with open(F_INBOX, "a", encoding="utf-8") as f:
                 f.write(line)
             try:
                 if os.path.getsize(F_INBOX) > 500000:
-                    with open(F_INBOX, "r") as f:
+                    with open(F_INBOX, "r", encoding="utf-8") as f:
                         all_lines = f.readlines()
                     if len(all_lines) > 5000:
-                        with open(F_INBOX, "w") as f:
+                        with open(F_INBOX, "w", encoding="utf-8") as f:
                             f.writelines(all_lines[-3000:])
             except Exception:
                 pass
@@ -3994,7 +4043,7 @@ def _write_inbox(chat_id, tipe, title, body):
 def _write_inbox_all_users(tipe, title, body):
     """Broadcast inbox ke semua user."""
     try:
-        with open(F_USERS, "r") as f:
+        with open(F_USERS, "r", encoding="utf-8") as f:
             users = [ln.strip() for ln in f if ln.strip() and not ln.startswith('-')]
         for uid in set(users):
             _write_inbox(uid, tipe, title, body)
@@ -4019,7 +4068,7 @@ def _write_testimoni_real(chat_id, paket, harga, metode):
             masked = mask_username(raw)
             ts = int(time.time())
             line = chat_id + "|" + masked + "|" + paket + "|" + harga + "|" + str(ts) + "|" + metode + "\n"
-            with open(F_TESTIMONI, "a") as f:
+            with open(F_TESTIMONI, "a", encoding="utf-8") as f:
                 f.write(line)
     except Exception as e:
         log_error("_write_testimoni_real", e)
@@ -4047,7 +4096,7 @@ def generate_real_testimonial(chat_id, resi_target):
     detail_harga = "Rp 100.000"
     pay_method_label = "TRANSFER MANUAL"
     try:
-        with open(F_ORDERS, "r") as f:
+        with open(F_ORDERS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 11 and parts[6].strip() == resi_target.strip():
@@ -4161,7 +4210,7 @@ def callback_handler_master(call):
                 vouchers = _read_all_vouchers()
                 jumlah = len(vouchers)
                 if os.path.exists(F_VOUCHERS):
-                    with open(F_VOUCHERS, "w") as f:
+                    with open(F_VOUCHERS, "w", encoding="utf-8") as f:
                         f.write("")
                 bot.edit_message_text(chat_id=chat_id, message_id=message_id,
                                       text=f"✅ <b>{jumlah} voucher berhasil dihapus semua!</b>",
@@ -4193,7 +4242,7 @@ def callback_handler_master(call):
                 target_user_id = parts[1] if action not in ['apoin', 'tpoin'] and len(parts) > 2 else None
                 current_db_status = ""
                 try:
-                    with open(F_ORDERS, "r") as f:
+                    with open(F_ORDERS, "r", encoding="utf-8") as f:
                         for line in f:
                             p = line.strip().split('|')
                             if len(p) >= 8 and p[6].strip() == resi_code.strip():
@@ -4213,7 +4262,7 @@ def callback_handler_master(call):
                     p_points_val = 0
                     if action == 'apoin':
                         try:
-                            with open(F_ORDERS, "r") as f:
+                            with open(F_ORDERS, "r", encoding="utf-8") as f:
                                 for line in f:
                                     p = line.strip().split('|')
                                     if len(p) >= 11 and p[6].strip() == resi_code.strip():
@@ -4254,7 +4303,7 @@ def callback_handler_master(call):
                                               text=new_admin_text, parse_mode="HTML", reply_markup=None)
                     detail_paket, detail_harga, waktu_beli = "VIP Package", "Rp 100.000", datetime.now(WIB).strftime('%d-%m-%Y, %H:%M:%S WIB')
                     try:
-                        with open(F_ORDERS, "r") as f:
+                        with open(F_ORDERS, "r", encoding="utf-8") as f:
                             for line in f:
                                 p = line.strip().split('|')
                                 if len(p) >= 8 and p[6].strip() == resi_code.strip():
@@ -4386,7 +4435,7 @@ def callback_handler_master(call):
                 )
             elif tipe == "diskon":
                 try:
-                    with open(F_USER_VOUCHER, "a") as f:
+                    with open(F_USER_VOUCHER, "a", encoding="utf-8") as f:
                         f.write(f"{chat_id}|DISKON{nilai}|{int(time.time())}\n")
                 except Exception:
                     pass
@@ -4468,7 +4517,7 @@ def callback_handler_master(call):
                     rank_icon = medals[idx - 1] if idx <= 3 else f"<b>{idx}.</b>"
                     text += (f"{rank_icon} {masked}{marker}\n"
                              f"   📦 {stat['total_order']}x transaksi\n"
-                             f"   💰 Rp {stat['total_belanja']:,}\n\n")
+                             f"   💰 Rp {_rp(stat['total_belanja'])}\n\n")
                 text += "━━━━━━━━━━━━━━━━━━━\n🔥 Terus belanja!"
 
                 markup = types.InlineKeyboardMarkup(row_width=1)
@@ -4628,7 +4677,7 @@ def callback_handler_master(call):
             resi_target = data.replace('cancel_', '')
             admin_msg_id = None
             try:
-                with open(F_ORDERS, "r") as f:
+                with open(F_ORDERS, "r", encoding="utf-8") as f:
                     for line in f:
                         p = line.strip().split('|')
                         if len(p) >= 12 and p[6].strip() == resi_target.strip():
@@ -4771,7 +4820,7 @@ def callback_handler_master(call):
                 if voucher_diskon > 0:
                     harga_final -= voucher_diskon
                 harga_final = max(0, harga_final)
-                harga_final_str = f"Rp {harga_final:,}"
+                harga_final_str = f"Rp {_rp(harga_final)}"
                 save_order(chat_id, p_name, harga_final_str, resi_unik, payment_method="TRANSFER",
                            point_cost=0, admin_msg_id=0)
                 # FIX v12: Notif ke Admin
@@ -4792,7 +4841,7 @@ def callback_handler_master(call):
                 if lucky_diskon > 0:
                     invoice_text += f"🎰 <b>Diskon Lucky Draw</b>    : -{lucky_diskon}%\n"
                 if voucher_diskon > 0:
-                    invoice_text += f"🎫 <b>Voucher ({voucher_kode})</b>   : -Rp {voucher_diskon:,}\n"
+                    invoice_text += f"🎫 <b>Voucher ({voucher_kode})</b>   : -Rp {_rp(voucher_diskon)}\n"
                 invoice_text += (
                     f"💰 <b>Total Bayar Transfer</b> : <b>{harga_final_str}</b>\n"
                     f"🔑 <b>Nomor Resi Unik</b>  : <code>{resi_unik}</code>\n"
@@ -4852,10 +4901,10 @@ def callback_handler_master(call):
                     harga_final_qris -= voucher_diskon
                 harga_final_qris = max(0, harga_final_qris)
 
-                save_order(chat_id, p_name, f"Rp {harga_final_qris:,}", resi_unik,
+                save_order(chat_id, p_name, f"Rp {_rp(harga_final_qris)}", resi_unik,
                            payment_method="QRIS", point_cost=0, admin_msg_id=0)
                 # FIX v12: Notif ke Admin
-                notify_admin_new_order(chat_id, user, p_name, f"Rp {harga_final_qris:,}", resi_unik, "QRIS")
+                notify_admin_new_order(chat_id, user, p_name, f"Rp {_rp(harga_final_qris)}", resi_unik, "QRIS")
                 if is_promo_used:
                     set_user_coupon_status(chat_id, "PENDING")
 
@@ -4873,9 +4922,9 @@ def callback_handler_master(call):
                 if lucky_diskon > 0:
                     invoice_caption += f"🎰 <b>Diskon Lucky Draw</b>    : -{lucky_diskon}%\n"
                 if voucher_diskon > 0:
-                    invoice_caption += f"🎫 <b>Voucher ({voucher_kode})</b>   : -Rp {voucher_diskon:,}\n"
+                    invoice_caption += f"🎫 <b>Voucher ({voucher_kode})</b>   : -Rp {_rp(voucher_diskon)}\n"
                 invoice_caption += (
-                    f"💰 <b>Total Bayar QRIS</b> : <b>Rp {harga_final_qris:,}</b>\n"
+                    f"💰 <b>Total Bayar QRIS</b> : <b>Rp {_rp(harga_final_qris)}</b>\n"
                     f"🔑 <b>Nomor Resi Unik</b>  : <code>{resi_unik}</code>\n"
                     f"⏱️ <b>Batas Waktu</b>      : 15 Menit\n\n"
                     "📱 <b>PEMBAYARAN VIA QRIS</b>\n"
@@ -4883,7 +4932,7 @@ def callback_handler_master(call):
                     "(DANA, OVO, GoPay, ShopeePay, LinkAja, Mobile Banking, dll).\n\n"
                     "⚠️ <b>PENTING — WAJIB DIBACA!</b>\n"
                     f"Masukkan nominal transfer <b>PERSIS</b> sebesar:\n"
-                    f"👉 <b>Rp {harga_final_qris:,}</b>\n\n"
+                    f"👉 <b>Rp {_rp(harga_final_qris)}</b>\n\n"
                     "Jangan dilebihkan atau dikurangi ya Kak, biar admin gampang verifikasi "
                     "dan pesananmu cepet diproses! 🙏\n\n"
                     "🛡️ <b>INSTRUKSI KONFIRMASI:</b>\n"
@@ -4963,7 +5012,7 @@ def callback_handler_master(call):
             bot.edit_message_text(chat_id=chat_id, message_id=message_id,
                                   text=f"⭐ <b>Terima kasih rating {rating_val} bintang!</b>\nPilih ulasan:",
                                   parse_mode="HTML", reply_markup=markup_ulasan)
-            with open(f"pending_review_{chat_id}.txt", "w") as f:
+            with open(f"pending_review_{chat_id}.txt", "w", encoding="utf-8") as f:
                 f.write(f"{resi_code}|{rating_val}")
             return
 
@@ -5219,7 +5268,7 @@ def handle_text_and_reviews(message):
             message,
             f"✅ <b>VOUCHER BERHASIL DI-REDEEM!</b>\n\n"
             f"🎫 Kode: <code>{kode}</code>\n"
-            f"💵 Diskon: Rp {diskon:,}\n"
+            f"💵 Diskon: Rp {_rp(diskon)}\n"
             f"📊 Sisa Kuota Voucher: <b>{sisa}</b>\n\n"
             "💡 Voucher akan otomatis terpakai saat checkout paket berikutnya.\n"
             "⚠️ <i>Voucher sudah terkunci untuk akunmu — tidak bisa dipindah atau dipakai 2x.</i>",
@@ -5230,7 +5279,7 @@ def handle_text_and_reviews(message):
     review_flag_file = f"pending_review_{chat_id}.txt"
     try:
         if os.path.exists(review_flag_file):
-            with open(review_flag_file, "r") as f:
+            with open(review_flag_file, "r", encoding="utf-8") as f:
                 data_rev = f.read().strip().split('|')
             if len(data_rev) == 2:
                 resi_c, rating_c = data_rev
@@ -5329,7 +5378,7 @@ def cmd_apk_order(message):
         return
     try:
         orders = []
-        with open(F_ORDERS, "r") as f:
+        with open(F_ORDERS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 8 and parts[7].strip() == "PENDING":
@@ -5394,7 +5443,7 @@ def cmd_apk_stats(message):
         pending = 0
         sukses = 0
         total_pendapatan = 0
-        with open(F_ORDERS, "r") as f:
+        with open(F_ORDERS, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) >= 8 and parts[1] == today:
@@ -5410,7 +5459,7 @@ def cmd_apk_stats(message):
             f"📦 Total Order: <b>{total_hari}</b>\n"
             f"⏳ Pending: <b>{pending}</b>\n"
             f"✅ Sukses: <b>{sukses}</b>\n"
-            f"💰 Pendapatan: <b>Rp {total_pendapatan:,}</b>\n"
+            f"💰 Pendapatan: <b>Rp {_rp(total_pendapatan)}</b>\n"
         )
         bot.reply_to(message, text, parse_mode="HTML")
     except Exception as e:
@@ -5443,7 +5492,7 @@ def read_paket_override():
     try:
         if not os.path.exists(F_PAKET_OVERRIDE):
             return ov
-        with open(F_PAKET_OVERRIDE, "r") as f:
+        with open(F_PAKET_OVERRIDE, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 if len(parts) == 3:
@@ -5459,7 +5508,7 @@ def read_paket_override():
 def write_paket_override(ov):
     try:
         tmp = F_PAKET_OVERRIDE + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             for k, v in ov.items():
                 f.write(k + "|" + str(v['harga']) + "|" + str(v['poin']) + "\n")
         os.replace(tmp, F_PAKET_OVERRIDE)
@@ -5497,7 +5546,7 @@ def read_custom_paket():
     try:
         if not os.path.exists(F_CUSTOM_PAKET):
             return paket
-        with open(F_CUSTOM_PAKET, "r") as f:
+        with open(F_CUSTOM_PAKET, "r", encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split('|')
                 # Harus EXACTLY 7 fields, DAN field numerik harus valid
@@ -5528,7 +5577,7 @@ def save_custom_paket(paket_dict):
         for kode, p in paket_dict.items():
             rows.append(f"{kode}|{p['nama']}|{p['harga']}|{p['poin']}|{p['deskripsi']}|{p['kategori']}|{p['stok']}")
         tmp = F_CUSTOM_PAKET + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             f.write("\n".join(rows) + ("\n" if rows else ""))
         os.replace(tmp, F_CUSTOM_PAKET)
         return True
@@ -5542,7 +5591,7 @@ def read_blacklist():
     try:
         if not os.path.exists(F_BLACKLIST):
             return bl
-        with open(F_BLACKLIST, "r") as f:
+        with open(F_BLACKLIST, "r", encoding="utf-8") as f:
             for line in f:
                 kode = line.strip()
                 if kode:
@@ -5554,7 +5603,7 @@ def read_blacklist():
 
 def save_blacklist(bl):
     try:
-        with open(F_BLACKLIST, "w") as f:
+        with open(F_BLACKLIST, "w", encoding="utf-8") as f:
             f.write("\n".join(sorted(bl)) + ("\n" if bl else ""))
         return True
     except Exception as e:
@@ -5591,7 +5640,7 @@ def get_all_paket_combined():
 def write_restock_log(kode, stok_lama, stok_baru, trigger="manual"):
     try:
         now_str = datetime.now(WIB).strftime('%d-%m-%Y %H:%M:%S')
-        with open(F_RESTOCK_LOG, "a") as f:
+        with open(F_RESTOCK_LOG, "a", encoding="utf-8") as f:
             f.write(f"{now_str}|{kode}|{stok_lama}|{stok_baru}|{trigger}\n")
     except Exception as e:
         log_error("write_restock_log", e)
@@ -5619,7 +5668,7 @@ def broadcast_restock(kode, stok_lama, stok_baru, trigger="manual"):
         )
         # 1. Broadcast ke semua user
         try:
-            with open(F_USERS, "r") as f:
+            with open(F_USERS, "r", encoding="utf-8") as f:
                 users = [line.strip() for line in f.read().splitlines() if line.strip()]
             sukses = 0
             for chat_id in set(users):
@@ -5965,7 +6014,7 @@ def cmd_logrestock(message):
         bot.reply_to(message, "📭 Belum ada history restock.")
         return
     try:
-        with open(F_RESTOCK_LOG, "r") as f:
+        with open(F_RESTOCK_LOG, "r", encoding="utf-8") as f:
             lines = [ln.strip() for ln in f if ln.strip()]
         if not lines:
             bot.reply_to(message, "📭 Belum ada history restock.")
@@ -5994,7 +6043,7 @@ def cmd_hapus_poin_user(message):
     # Baca list user
     users = []
     try:
-        with open(F_USERS, "r") as f:
+        with open(F_USERS, "r", encoding="utf-8") as f:
             users = [ln.strip() for ln in f if ln.strip() and not ln.startswith('-')]
     except FileNotFoundError:
         pass
@@ -6006,7 +6055,7 @@ def cmd_hapus_poin_user(message):
     # Baca points
     points_map = {}
     try:
-        with open(F_POINTS, "r") as f:
+        with open(F_POINTS, "r", encoding="utf-8") as f:
             for ln in f:
                 p = ln.strip().split('|')
                 if len(p) == 2:
@@ -6065,7 +6114,7 @@ def cmd_recenterrors(message):
         if not os.path.exists(F_ERROR_LOG_API):
             bot.reply_to(message, "✅ Belum ada error tercatat. Bersih!")
             return
-        with open(F_ERROR_LOG_API, "r") as f:
+        with open(F_ERROR_LOG_API, "r", encoding="utf-8") as f:
             lines = [ln.strip() for ln in f if ln.strip()]
         if not lines:
             bot.reply_to(message, "✅ Log error kosong.")
@@ -6105,7 +6154,7 @@ def cmd_errorstats(message):
         if not os.path.exists(F_ERROR_LOG_API):
             bot.reply_to(message, "✅ Belum ada error.")
             return
-        with open(F_ERROR_LOG_API, "r") as f:
+        with open(F_ERROR_LOG_API, "r", encoding="utf-8") as f:
             lines = [ln.strip() for ln in f if ln.strip()]
         if not lines:
             bot.reply_to(message, "✅ Kosong.")
@@ -6152,7 +6201,7 @@ def cmd_securitystatus(message):
         blocked_count = 0
         now = time.time()
         if os.path.exists(F_BLOCKED):
-            with open(F_BLOCKED, "r") as f:
+            with open(F_BLOCKED, "r", encoding="utf-8") as f:
                 for ln in f:
                     p = ln.strip().split('|')
                     if len(p) == 2:
@@ -6163,11 +6212,11 @@ def cmd_securitystatus(message):
                             pass
         error_count = 0
         if os.path.exists(F_ERROR_LOG_API):
-            with open(F_ERROR_LOG_API, "r") as f:
+            with open(F_ERROR_LOG_API, "r", encoding="utf-8") as f:
                 error_count = len([ln for ln in f if ln.strip()])
         spam_count = 0
         if os.path.exists(F_SPAM_LOG):
-            with open(F_SPAM_LOG, "r") as f:
+            with open(F_SPAM_LOG, "r", encoding="utf-8") as f:
                 spam_count = len([ln for ln in f if ln.strip()])
         text = (
             "🛡️ <b>SECURITY STATUS</b>\n\n"
@@ -6197,10 +6246,10 @@ def cmd_unblock(message):
     uid = args[0].strip()
     try:
         if os.path.exists(F_BLOCKED):
-            with open(F_BLOCKED, "r") as f:
+            with open(F_BLOCKED, "r", encoding="utf-8") as f:
                 lines = [ln for ln in f if ln.strip()]
             kept = [ln for ln in lines if not ln.startswith(uid + "|")]
-            with open(F_BLOCKED, "w") as f:
+            with open(F_BLOCKED, "w", encoding="utf-8") as f:
                 f.writelines(kept)
         _spam_tracker.pop(uid, None)
         bot.reply_to(message, "OK User " + uid + " di-unblock.")
@@ -6228,7 +6277,7 @@ def cmd_inboxstats(message):
         if not os.path.exists(F_INBOX):
             bot.reply_to(message, "Belum ada inbox.")
             return
-        with open(F_INBOX, "r") as f:
+        with open(F_INBOX, "r", encoding="utf-8") as f:
             lines = [ln for ln in f if ln.strip()]
         counts = {}
         for ln in lines:
@@ -6263,7 +6312,7 @@ def cmd_fixcustompaket(message):
         if not os.path.exists(F_CUSTOM_PAKET):
             bot.reply_to(message, "File custom_paket.txt gak ada.")
             return
-        with open(F_CUSTOM_PAKET, "r") as f:
+        with open(F_CUSTOM_PAKET, "r", encoding="utf-8") as f:
             raw_lines = f.readlines()
         valid_rows = []
         skip_count = 0
@@ -6283,7 +6332,7 @@ def cmd_fixcustompaket(message):
             shutil.copy2(F_CUSTOM_PAKET, F_CUSTOM_PAKET + ".corruptbak")
         except Exception:
             pass
-        with open(F_CUSTOM_PAKET, "w") as f:
+        with open(F_CUSTOM_PAKET, "w", encoding="utf-8") as f:
             f.writelines(valid_rows)
         bot.reply_to(
             message,

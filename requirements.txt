@@ -1,8 +1,12 @@
-# force rebuild V Terbaru
-pyTelegramBotAPI
-groq
-matplotlib
-flask
-flask-cors
-waitress
-requests
+# Dependency Pakel MlbbStore (bot Telegram + API)
+# Pakai batas bawah (>=) supaya build tidak rusak oleh versi lama, tapi tetap dapat patch terbaru.
+# Untuk build yang benar-benar reproducible: jalankan `pip freeze` di environment yang sudah jalan,
+# lalu pin versinya di sini.
+pyTelegramBotAPI>=4.14
+flask>=2.3
+flask-cors>=4.0
+waitress>=2.1
+requests>=2.31
+# Opsional (dimuat hanya saat dipakai; hapus baris di bawah kalau fiturnya tidak dipakai biar build lebih cepat)
+matplotlib>=3.7      # grafik laporan di bot (import di dalam fungsi)
+groq>=0.9            # AI CS (saat ini AI_ENABLED = False)
